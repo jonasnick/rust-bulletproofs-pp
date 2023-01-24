@@ -157,7 +157,7 @@ fn scalar_challenge(t: &mut merlin::Transcript) -> PubScalarNz {
 }
 
 impl NormProof {
-    /// Compute v = |w|^2_q + <l, q>
+    /// Compute v = |w|^2_q + <l, c>
     pub(crate) fn v(
         w_vec: &[PubScalarZ],
         l_vec: &[PubScalarZ],
@@ -171,7 +171,7 @@ impl NormProof {
         s!(w_sq + l_c).mark::<Public>()
     }
 
-    /// Prove that w^2 + <l, c> = v
+    /// Prove that |w|^2_q + <l, c> = v
     /// Use the challenge as r and compute q = r^2
     pub fn prove(
         transcript: &mut merlin::Transcript,
