@@ -496,14 +496,6 @@ pub(crate) fn tester(sz_w: u32, sz_l: u32) {
 // }
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 
-fn fibonacci(n: u64) -> u64 {
-    match n {
-        0 => 1,
-        1 => 1,
-        n => fibonacci(n - 1) + fibonacci(n - 2),
-    }
-}
-
 fn bench_prover(ct: &mut Criterion) {
     let sz_w = 64;
     let sz_l = 8;
@@ -555,4 +547,32 @@ fn bench_prover(ct: &mut Criterion) {
             BatchSize::SmallInput
         )
     });
+}
+
+#[cfg(test)]
+mod tests{
+    use super::*;
+
+    #[test]
+    fn test_norm_arg() {
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let gens = BaseGens::new(1, 1);
+        let two = Scalar::from(2).mark::<Public>().mark::<NonZero>().unwrap();
+        let w_vec = vec![two.mark::<Zero>()];
+        let l_vec = vec![two.mark::<Zero>()];
+        let c_vec = vec![two.mark::<Zero>()];
+        let r = two;
+        let q = s!(2*two).mark::<Public>().mark::<NonZero>().unwrap();
+
+        let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
+
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let Cp = Cp.mark::<NonZero>().unwrap();
+
+        assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
+    }
+
 }
