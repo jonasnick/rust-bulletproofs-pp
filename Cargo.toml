@@ -13,6 +13,11 @@ secp256kfun = "0.8"
 sha2 = "0.10"
 
 
+[dev-dependencies]
+proptest = "1.0"
+secp256kfun = { version = "0.8", features = ["proptest"] }
+
+
 [[bench]]
 name = "norm-arg"
 harness = false

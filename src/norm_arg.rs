@@ -552,6 +552,8 @@ fn bench_prover(ct: &mut Criterion) {
 mod tests{
     use super::*;
 
+    use proptest::prelude::*;
+
     #[test]
     fn test_norm_arg() {
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
@@ -573,5 +575,24 @@ mod tests{
 
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
     }
+    proptest! {
+        #[test]
+        fn norm_arg(ref w_vec in any::<[Scalar<Public, Zero>; 8]>(), r in any::<Scalar<Public, NonZero>>()) {
+            let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+            let gens = BaseGens::new(w_vec.len() as u32, 1);
+            let two = s!(2).public();
+            let l_vec = vec![two.mark_zero()];
+            let c_vec = vec![two.mark_zero()];
+            let q = s!(r*r).public();
 
+            let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.to_vec(), l_vec.clone(), c_vec.clone(), r);
+
+            let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+            let v = NormProof::v(&w_vec.to_vec(), &l_vec, &c_vec, q);
+
+            let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+            let Cp = Cp.non_zero().unwrap();
+
+            assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))        }
+    }
 }
