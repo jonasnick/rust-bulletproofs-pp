@@ -70,9 +70,9 @@ impl BaseGens {
 #[derive(Debug, Clone)]
 pub struct NormProof {
     /// Vector of points X_i that used during norm recursion
-    pub x_vec: Vec<Point>,
+    pub x_vec: Vec<Point<Normal, Public, Zero>>,
     /// Vector of points R_i that used during norm recursion
-    pub r_vec: Vec<Point>,
+    pub r_vec: Vec<Point<Normal, Public, Zero>>,
     /// The norm vector reducing the recursion to 1.
     pub n: PubScalarZ,
     /// The l value
@@ -254,11 +254,19 @@ impl NormProof {
                 // assert_eq!(R_v, {let wa = w1[0]; s!(wa *wa*q_sq)});
                 let R = bp_comm(R_v, &g1, &h1, &w1, &l1);
 
-                let X = X.non_zero().unwrap().normalize();
-                let R = R.non_zero().unwrap().normalize();
-
-                transcript.append_message(b"L", &X.to_bytes());
-                transcript.append_message(b"R", &R.to_bytes());
+                let X = X.normalize();
+                let R = R.normalize();
+                // TODO: secp256kfun already serializes the point at infinity as 33 bytes of 0
+                if X.is_zero() {
+                    transcript.append_message(b"L", &[0u8; 33]);
+                } else {
+                    transcript.append_message(b"L", &X.non_zero().unwrap().to_bytes());
+                }
+                if R.is_zero() {
+                    transcript.append_message(b"R", &[0u8; 33]);
+                } else {
+                    transcript.append_message(b"R", &R.non_zero().unwrap().to_bytes());
+                }
 
                 X_vec.push(X);
                 R_vec.push(R);
@@ -388,7 +396,7 @@ impl NormProof {
         r: PubScalarNz,
     ) -> bool {
         // Verify that n^2 + l = v for the given commitment.
-        let C_i = C.non_normal();
+        let C_i = C.non_normal().mark_zero();
         let mut q = s!(r * r).public();
         // Factors with which we multiply the generators.
         let (challenges, s_g, s_h) =
@@ -587,7 +595,6 @@ mod tests{
     // w_vec and l_vec (and therefore v) are 0, but proving succeeds
     #[test]
     fn test_norm_arg_zeros() {
-        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
         let w_vec = vec![Scalar::zero()];
         let l_vec = vec![Scalar::zero()];
         let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
@@ -601,15 +608,14 @@ mod tests{
         assert_eq!(Cp, Point::<Normal, Public, Zero>::zero());
 
         // proving doesn't panic
-        let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
     }
 
-    // If w is longer than l and w only contains zeros then the prover panics.
-    // Same if l is longer than w andlw only contains zeros.
+    // If w is longer than l and w only contains zeros then X is the point at infinity.
+    // Same if l is longer than w and only contains zeros then X or R (TODO) are the point at infinity.
     #[test]
     fn test_norm_arg_zeros2() {
-        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
         let w_vec = vec![Scalar::zero(), Scalar::zero()];
         let l_vec = vec![rand_scalar()];
         let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
@@ -617,16 +623,27 @@ mod tests{
         let r = Scalar::random(&mut rand::thread_rng()).public();
         let q = s!(r*r).public();
 
-        let result = std::panic::catch_unwind(|| NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r));
-        assert!(result.is_err());
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let Cp = Cp.non_zero().unwrap();
+        assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
 
         let l_vec = w_vec;
         let w_vec = vec![rand_scalar()];
-        let result = std::panic::catch_unwind(|| NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r));
-        assert!(result.is_err());
+        let c_vec = vec![rand_scalar().mark_zero(); l_vec.len()];
+        let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let Cp = Cp.non_zero().unwrap();
+        assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
     }
 
-    // TODO: this fails
     proptest! {
         #[test]
         fn norm_arg(rand in any::<Scalar<Public, Zero>>(),
@@ -643,14 +660,6 @@ mod tests{
             // w_vec and l_vec must not both be 0
             if rand.is_zero() && rand2.is_zero() {
                 w_vec[0] = Scalar::one().mark_zero();
-            }
-            // the longer vector must not be all 0
-            if rand.is_zero() && w_vec.len() > l_vec.len() {
-                w_vec[0] = Scalar::one().mark_zero();
-            }
-            if rand2.is_zero() && l_vec.len() > w_vec.len() {
-                // maybe for the second vector at least one odd element must be non-zero
-                l_vec[1] = Scalar::one().mark_zero();
             }
 
             let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
