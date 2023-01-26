@@ -172,6 +172,7 @@ impl NormProof {
 
     /// Prove that |w|^2_q + <l, c> = v
     /// Use the challenge as r and compute q = r^2
+    /// w and l must not both be the zero vector
     pub fn prove(
         transcript: &mut merlin::Transcript,
         mut gens: BaseGens,
@@ -305,6 +306,10 @@ impl NormProof {
             Hs = &mut Hs[..l_n];
             r = q_old;
             q = q_sq;
+        }
+
+        if w[0].is_zero() && l[0].is_zero() {
+            panic!("inputs w and l were 0 vectors");
         }
 
         Self {
@@ -592,7 +597,7 @@ mod tests{
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
     }
 
-    // w_vec and l_vec (and therefore v) are 0, but proving succeeds
+    // w_vec and l_vec (and therefore v) are 0, proving panics
     #[test]
     fn test_norm_arg_zeros() {
         let w_vec = vec![Scalar::zero()];
@@ -607,9 +612,7 @@ mod tests{
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
         assert_eq!(Cp, Point::<Normal, Public, Zero>::zero());
 
-        // proving doesn't panic
-        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-        let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let result = std::panic::catch_unwind(|| NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r));
     }
 
     // If w is longer than l and w only contains zeros then X is the point at infinity.
@@ -657,24 +660,20 @@ mod tests{
             let lc_vec_len = 2u32.pow(lc_vec_len_exp);
             let mut w_vec = vec![rand; w_vec_len as usize];
             let mut l_vec = vec![rand2; lc_vec_len as usize];
-            // w_vec and l_vec must not both be 0
-            if rand.is_zero() && rand2.is_zero() {
-                w_vec[0] = Scalar::one().mark_zero();
-            }
 
             let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
             let c_vec = vec![s!(rand + rand2*rand2).public(); lc_vec_len as usize];
             let q = s!(r*r).public();
 
-            let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
-
-            let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-            let v = NormProof::v(&w_vec.to_vec(), &l_vec, &c_vec, q);
-
-            let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
-            let Cp = Cp.non_zero().unwrap();
-
-            assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
+            // w_vec and l_vec must not both be 0
+            if !(rand.is_zero() && rand2.is_zero()) {
+                let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+                let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+                let v = NormProof::v(&w_vec.to_vec(), &l_vec, &c_vec, q);
+                let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+                let Cp = Cp.non_zero().unwrap();
+                assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
+            }
         }
     }
 }
