@@ -9,8 +9,8 @@ edition = "2021"
 criterion = "0.4.0"
 merlin = "3.0.0"
 rand = "0.8.5"
-secp256kfun = "0.7.2"
-sha2 = "0.9.6"
+secp256kfun = "0.8"
+sha2 = "0.10"
 
 
 [[bench]]

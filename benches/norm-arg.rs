@@ -2,7 +2,7 @@
 
 use merlin::Transcript;
 use rand::thread_rng;
-use secp256kfun::{g, hash::Tagged, s, Point, G};
+use secp256kfun::{g, hash::Tag, s, Point, G};
 extern crate sha2;
 use sha2::{digest::Digest, Sha256};
 
@@ -19,26 +19,26 @@ extern crate merlin;
 #[derive(Clone, Debug)]
 pub struct BaseGens {
     /// The points Vec<G>
-    pub G_vec: Vec<Point<Jacobian>>,
+    pub G_vec: Vec<Point<NonNormal>>,
     /// The points H
-    pub H_vec: Vec<Point<Jacobian>>,
+    pub H_vec: Vec<Point<NonNormal>>,
 }
 
 impl BaseGens {
     /// Create a new base generator with the given G and H.
     pub fn new(num_g: u32, num_h: u32) -> Self {
         // generate a set of generators for G
-        fn gen_tagged_points(n: u32, tag: &str) -> Vec<Point<Jacobian>> {
+        fn gen_tagged_points(n: u32, tag: &str) -> Vec<Point<NonNormal>> {
             let mut gs = Vec::with_capacity(n as usize);
             let mut i: u64 = 0;
             while gs.len() < n as usize {
                 loop {
                     i = i + 1;
-                    let mut hash_x = Tagged::tagged(&Sha256::default(), &[tag.as_bytes(), b"x"].concat());
+                    let mut hash_x = Sha256::default().tag_vectored([tag.as_bytes(), b"x"].into_iter());
                     hash_x.update(&i.to_be_bytes());
                     let gen_x = hash_x.finalize();
                     let mut hash_y =
-                        sha2::Sha256::default().tagged(&[tag.as_bytes(), b"y"].concat());
+                        sha2::Sha256::default().tag_vectored([tag.as_bytes(), b"y"].into_iter());
                     hash_y.update(&i.to_be_bytes());
                     let gen_y = hash_y.finalize();
 
@@ -47,7 +47,7 @@ impl BaseGens {
                     bytes[0] = 2u8 + (gen_y[0] & 1u8);
                     match Point::from_bytes(bytes) {
                         Some(g) => {
-                            gs.push(g.mark::<Jacobian>());
+                            gs.push(g.non_normal());
                             break;
                         }
                         None => continue,
@@ -89,7 +89,7 @@ where
     for (a, b) in l_vec.clone().into_iter().zip(c_vec.clone().into_iter()) {
         res = s!(res + a * b);
     }
-    res.mark::<Public>()
+    res.public()
 }
 
 /// Compute the q-weighted inner product of two vectors.
@@ -99,12 +99,12 @@ where
     B: Iterator<Item = &'a PubScalarZ> + Clone,
 {
     let mut res = s!(0);
-    let mut q_pow = s!(1).mark::<Zero>();
+    let mut q_pow = s!(1).mark_zero();
     for (a, b) in a_iter.clone().into_iter().zip(b_iter.clone().into_iter()) {
         q_pow = s!(q_pow * q);
         res = s!(res + a * b * q_pow);
     }
-    res.mark::<Public>()
+    res.public()
 }
 
 // /// Compute the q-weighted inner product of two vectors.
@@ -119,9 +119,9 @@ fn bp_comm<'a, A, B>(
     H_vec: &A,
     n: &B,
     l: &B,
-) -> Point<Jacobian, Public, Zero>
+) -> Point<NonNormal, Public, Zero>
 where
-    A: Iterator<Item = &'a Point<Jacobian>> + Clone,
+    A: Iterator<Item = &'a Point<NonNormal>> + Clone,
     B: Iterator<Item = &'a PubScalarZ> + Clone,
 {
     let mut res = g!(v * G);
@@ -135,12 +135,12 @@ where
 }
 
 /// Compute R + r*<l, G>
-fn point_inner_product<'a, A, B>(Gs: &A, l: &B) -> Point<Jacobian, Public, Zero>
+fn point_inner_product<'a, A, B>(Gs: &A, l: &B) -> Point<NonNormal, Public, Zero>
 where
-    A: Iterator<Item = &'a Point<Jacobian>> + Clone,
+    A: Iterator<Item = &'a Point<NonNormal>> + Clone,
     B: Iterator<Item = &'a PubScalarZ> + Clone,
 {
-    let mut res = Point::zero().mark::<Jacobian>();
+    let mut res = Point::zero();
     for (g, l) in Gs.clone().into_iter().zip(l.clone().into_iter()) {
         res = g!(res + l * g);
     }
@@ -152,8 +152,7 @@ fn scalar_challenge(t: &mut merlin::Transcript) -> PubScalarNz {
     let mut dest = [0u8; 32];
     t.challenge_bytes(b"e", &mut dest);
     let e = Scalar::from_bytes(dest).unwrap();
-    let e = e.mark::<Public>();
-    e.mark::<NonZero>().unwrap()
+    e.non_zero().unwrap()
 }
 
 impl NormProof {
@@ -168,7 +167,7 @@ impl NormProof {
         // Compute <l, c>
         let l_c = inner_product(&l_vec.iter(), &c_vec.iter());
         // Compute v = w*w*q + <l, c>
-        s!(w_sq + l_c).mark::<Public>()
+        s!(w_sq + l_c).public()
     }
 
     /// Prove that w^2 + <l, c> = v
@@ -200,7 +199,7 @@ impl NormProof {
         let ln_n = std::cmp::max(l_n, w_n).next_power_of_two();
         let mut X_vec = Vec::with_capacity(ln_n);
         let mut R_vec = Vec::with_capacity(ln_n);
-        let mut q = s!(r * r).mark::<Public>();
+        let mut q = s!(r * r).public();
 
         let v_init = Self::v(w, l, c, q);
         let mut v_final = v_init;
@@ -225,8 +224,8 @@ impl NormProof {
                 let (c0, c1) = alter_iter(c);
                 let (h0, h1) = alter_iter(Hs);
 
-                let q_sq = s!(q * q).mark::<Public>();
-                let r_inv = r.invert().mark::<Public>();
+                let q_sq = s!(q * q).public();
+                let r_inv = r.invert().public();
                 let X_v0 = inner_product(&c0, &l1);
                 let X_v1 = inner_product(&c1, &l0);
                 let X_v2 = weighted_inner_product(&w0, &w1, q_sq);
@@ -243,12 +242,12 @@ impl NormProof {
 
                 let R_v_0 = inner_product(&c1, &l1);
                 let R_v_1 = weighted_inner_product(&w1, &w1, q_sq);
-                let R_v = s!(R_v_0 + R_v_1).mark::<Public>();
+                let R_v = s!(R_v_0 + R_v_1).public();
                 // assert_eq!(R_v, {let wa = w1[0]; s!(wa *wa*q_sq)});
                 let R = bp_comm(R_v, &g1, &h1, &w1, &l1);
 
-                let X = X.mark::<NonZero>().unwrap().normalize();
-                let R = R.mark::<NonZero>().unwrap().normalize();
+                let X = X.non_zero().unwrap().normalize();
+                let R = R.non_zero().unwrap().normalize();
 
                 transcript.append_message(b"L", &X.to_bytes());
                 transcript.append_message(b"R", &R.to_bytes());
@@ -257,15 +256,15 @@ impl NormProof {
                 R_vec.push(R);
 
                 // let e = scalar_challenge(transcript);
-                let e = s!(2).mark::<Public>();
+                let e = s!(2).public();
                 (r_inv, r, q, q_sq, e)
             };
             if w_n > 1 {
                 let mut i = 0;
                 while i < w_n {
                     let (wl, wr, gl, gr) = (w[i], w[i + 1], Gs[i], Gs[i + 1]);
-                    w[i/2] = s!(r_inv * wl + e * wr).mark::<Public>();
-                    Gs[i/2] = g!(r * gl + e * gr).mark::<NonZero>().unwrap();
+                    w[i/2] = s!(r_inv * wl + e * wr).public();
+                    Gs[i/2] = g!(r * gl + e * gr).non_zero().unwrap();
                     i = i + 2;
                 }
             }
@@ -275,9 +274,9 @@ impl NormProof {
                 while i < l_n {
                     let (cl, cr, hl, hr) = (c[i], c[i + 1], Hs[i], Hs[i + 1]);
                     let (ll, lr) = (l[i], l[i + 1]);
-                    c[i/2] = s!(cl + e * cr).mark::<Public>();
-                    l[i/2] = s!(ll + e * lr).mark::<Public>();
-                    Hs[i/2] = g!(hl + e * hr).mark::<NonZero>().unwrap();
+                    c[i/2] = s!(cl + e * cr).public();
+                    l[i/2] = s!(ll + e * lr).public();
+                    Hs[i/2] = g!(hl + e * hr).non_zero().unwrap();
                     i += 2;
                 }
             }
@@ -319,7 +318,7 @@ impl NormProof {
     fn s_vec(n: usize, challenges: &[PubScalarNz]) -> Vec<PubScalarZ> {
         let mut s = Vec::with_capacity(n);
         let lg_n = log(n);
-        s.push(s!(1).mark::<Public>().mark::<Zero>());
+        s.push(s!(1).public().mark_zero());
         for i in 1..n {
             let lg_i = log(i);
             let k = 1 << lg_i;
@@ -328,8 +327,8 @@ impl NormProof {
             let u_not_last_set_bit = s[i - k];
             s.push(
                 s!(u_not_last_set_bit * u_val)
-                    .mark::<Public>()
-                    .mark::<Zero>(),
+                    .public()
+                    .mark_zero(),
             );
         }
         s
@@ -347,7 +346,7 @@ impl NormProof {
         for (X, R) in self.x_vec.iter().zip(self.r_vec.iter()) {
             t.append_message(b"L", &X.to_bytes());
             t.append_message(b"R", &R.to_bytes());
-            let e = s!(2).mark::<Public>();
+            let e = s!(2).public();
             // challenges.push(scalar_challenge(t));
             challenges.push(e);
         }
@@ -359,15 +358,15 @@ impl NormProof {
 
         // Compute g_n powers of q
         let mut r_pows = Vec::with_capacity(g_n);
-        r_pows.push(s!(1).mark::<Public>());
+        r_pows.push(s!(1).public());
         for i in 1..g_n {
             let last = r_pows[i - 1];
-            r_pows.push(s!(last * r).mark::<Public>());
+            r_pows.push(s!(last * r).public());
         }
         // Compute s_g * q_pow_perm
         for i in 0..g_n {
             let (s_g_i, q_pow_perm_i) = (s_g[i], r_pows[g_n - 1 - r_pow_perm[i] as usize]);
-            s_g[i] = s!(s_g_i * q_pow_perm_i).mark::<Public>();
+            s_g[i] = s!(s_g_i * q_pow_perm_i).public();
         }
         (challenges, s_g, s_h)
     }
@@ -381,15 +380,15 @@ impl NormProof {
         r: PubScalarNz,
     ) -> bool {
         // Verify that n^2 + l = v for the given commitment.
-        let C_i = C.mark::<Jacobian>();
-        let mut q = s!(r * r).mark::<Public>();
+        let C_i = C.non_normal();
+        let mut q = s!(r * r).public();
         // Factors with which we multiply the generators.
         let (challenges, s_g, s_h) =
             self.verification_scalars(transcript, r, gens.G_vec.len(), gens.H_vec.len());
 
         let lg_n = log(gens.G_vec.len());
         for _ in 0..lg_n {
-            q = s!(q * q).mark::<Public>();
+            q = s!(q * q).public();
         }
 
         let s_c = Self::s_vec(gens.H_vec.len(), &challenges);
@@ -397,22 +396,22 @@ impl NormProof {
 
         let v = s!(self.n * self.n * q + self.l * l_c);
 
-        let one = s!(1).mark::<Public>();
+        let one = s!(1);
 
         // These collects can be avoided if downstream allows borrow APIs
-        let scalar_iter = std::iter::once(one)
+        let scalar_iter = std::iter::once(one.public())
             .chain(challenges.iter().copied())
             .chain(
                 challenges
                     .iter()
-                    .map(|e| s!(e * e - 1).mark::<Public>().mark::<NonZero>().unwrap()),
+                    .map(|e| s!(e * e - 1).public().non_zero().unwrap()),
             )
             .into_iter()
             .collect::<Vec<_>>();
 
         let point_iter = std::iter::once(C_i)
-            .chain(self.x_vec.iter().copied().map(|X| X.mark::<Jacobian>()))
-            .chain(self.r_vec.iter().copied().map(|R| R.mark::<Jacobian>()))
+            .chain(self.x_vec.iter().copied().map(|X| X.non_normal()))
+            .chain(self.r_vec.iter().copied().map(|R| R.non_normal()))
             .into_iter()
             .collect::<Vec<_>>();
 
@@ -432,9 +431,7 @@ fn log(n: usize) -> usize {
 
 // Test prove
 fn rand_scalar() -> PubScalarZ {
-    Scalar::random(&mut thread_rng())
-        .mark::<Public>()
-        .mark::<Zero>()
+    Scalar::random(&mut thread_rng()).public().mark_zero()
 }
 
 fn rand_scalar_vec(l: u32) -> Vec<PubScalarZ> {
@@ -449,16 +446,16 @@ fn tester(sz_w: u32, sz_l: u32) {
     let mut w = rand_scalar_vec(sz_w);
     let mut l = rand_scalar_vec(sz_l);
     let mut c = rand_scalar_vec(sz_l);
-    w[0] = s!(1).mark::<Public>().mark::<Zero>();
-    w[1] = s!(3).mark::<Public>().mark::<Zero>();
-    w[2] = s!(5).mark::<Public>().mark::<Zero>();
-    w[3] = s!(7).mark::<Public>().mark::<Zero>();
+    w[0] = s!(1).public().mark_zero();
+    w[1] = s!(3).public().mark_zero();
+    w[2] = s!(5).public().mark_zero();
+    w[3] = s!(7).public().mark_zero();
 
-    l[0] = Scalar::zero().mark::<Public>();
-    c[0] = Scalar::zero().mark::<Public>();
+    l[0] = Scalar::zero();
+    c[0] = Scalar::zero();
 
-    let r = s!(2).mark::<NonZero>().unwrap().mark::<Public>();
-    let q = s!(r * r).mark::<Public>();
+    let r = s!(2).public();
+    let q = s!(r * r).public();
 
     let v = NormProof::v(&w, &l, &c, q);
     let (w_0, l_0, c_0) = (w[0], l[0], c[0]);
@@ -478,7 +475,7 @@ fn tester(sz_w: u32, sz_l: u32) {
     assert!(prf.verify(
         gens,
         &mut transcript,
-        C.normalize().mark::<NonZero>().unwrap(),
+        C.normalize().non_zero().unwrap(),
         &c,
         r,
     ))
@@ -513,10 +510,10 @@ fn bench_prover(ct: &mut Criterion) {
     let l = rand_scalar_vec(sz_l);
     let c = rand_scalar_vec(sz_l);
 
-    // let r = rand_scalar().mark::<NonZero>().unwrap();
-    let r = s!(2).mark::<Public>().mark::<NonZero>().unwrap();
+    // let r = rand_scalar().non_zero().unwrap();
+    let r = s!(2).public();
     let r = r.invert();
-    let q = s!(r*r).mark::<Public>();
+    let q = s!(r*r).public();
     ct.bench_function("prover", |b| {
         b.iter_batched(
             || {
@@ -533,11 +530,11 @@ fn bench_prover(ct: &mut Criterion) {
             BatchSize::SmallInput
         )
     });
-    let r = rand_scalar().mark::<NonZero>().unwrap();
-    let q = s!(r*r).mark::<Public>();
+    let r = rand_scalar().non_zero().unwrap();
+    let q = s!(r*r).public();
     let v = NormProof::v(&w, &l, &c, q);
     let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w.iter(), &l.iter());
-    let C = C.normalize().mark::<NonZero>().unwrap();
+    let C = C.normalize().non_zero().unwrap();
     let mut transcript = Transcript::new(b"test");
     // test norm argument prove
     let prf = NormProof::prove(&mut transcript, gens.clone(), w, l, c.clone(), r);
