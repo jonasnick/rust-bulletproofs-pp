@@ -220,6 +220,8 @@ impl NormProof {
                 let (w0, w1) = alter_iter(w);
                 let (g0, g1) = alter_iter(Gs);
 
+
+                dbg!(&l);
                 let (l0, l1) = alter_iter(l);
                 let (c0, c1) = alter_iter(c);
                 let (h0, h1) = alter_iter(Hs);
@@ -232,12 +234,18 @@ impl NormProof {
                 let X_v = &s!(X_v0 + X_v1 + 2 * r_inv * X_v2);
                 // assert_eq!(*X_v, {let wa = w0[0]; let wb = w1[0]; s!(2*wa *wb*q_sq*r_inv)});
 
+                dbg!(&X_v);
                 let mut X = g!(X_v * G);
+
                 // X = X + <g0, w1>*r + <g1, w0>/r + <h0, l1> + <h1, l0>
                 let X1 = point_inner_product(&g0, &w1);
                 let X2 = point_inner_product(&g1, &w0);
                 let X3 = point_inner_product(&h0, &l1);
                 let X4 = point_inner_product(&h1, &l0);
+                dbg!(&X1);
+                dbg!(&X2);
+                dbg!(&X3);
+                dbg!(&X4);
                 X = g!(X + r * X1 + r_inv * X2 + X3 + X4);
 
                 let R_v_0 = inner_product(&c1, &l1);
@@ -563,7 +571,7 @@ mod tests{
         let l_vec = vec![two.mark_zero()];
         let c_vec = vec![two.mark_zero()];
         let r = two;
-        let q = s!(2*two).public();
+        let q = s!(r*r).public();
 
         let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
 
@@ -575,17 +583,81 @@ mod tests{
 
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
     }
+
+    // w_vec and l_vec (and therefore v) are 0, but proving succeeds
+    #[test]
+    fn test_norm_arg_zeros() {
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let w_vec = vec![Scalar::zero()];
+        let l_vec = vec![Scalar::zero()];
+        let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+        let c_vec = vec![rand_scalar().mark_zero()];
+        let r = Scalar::random(&mut rand::thread_rng()).public();
+        let q = s!(r*r).public();
+
+        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
+        assert_eq!(v, Scalar::<Public, Zero>::zero());
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        assert_eq!(Cp, Point::<Normal, Public, Zero>::zero());
+
+        // proving doesn't panic
+        let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+    }
+
+    // If w is longer than l and w only contains zeros then the prover panics.
+    // Same if l is longer than w andlw only contains zeros.
+    #[test]
+    fn test_norm_arg_zeros2() {
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        let w_vec = vec![Scalar::zero(), Scalar::zero()];
+        let l_vec = vec![rand_scalar()];
+        let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+        let c_vec = vec![rand_scalar().mark_zero()];
+        let r = Scalar::random(&mut rand::thread_rng()).public();
+        let q = s!(r*r).public();
+
+        let result = std::panic::catch_unwind(|| NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r));
+        assert!(result.is_err());
+
+        let l_vec = w_vec;
+        let w_vec = vec![rand_scalar()];
+        let result = std::panic::catch_unwind(|| NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r));
+        assert!(result.is_err());
+    }
+
+    // TODO: this fails
     proptest! {
         #[test]
-        fn norm_arg(ref w_vec in any::<[Scalar<Public, Zero>; 8]>(), r in any::<Scalar<Public, NonZero>>()) {
+        fn norm_arg(rand in any::<Scalar<Public, Zero>>(),
+                    rand2 in any::<Scalar<Public, Zero>>(),
+                    w_vec_len_exp in 0u32..4,
+                    lc_vec_len_exp in 0u32..4,
+                    r in any::<Scalar<Public, NonZero>>()) {
             let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-            let gens = BaseGens::new(w_vec.len() as u32, 1);
-            let two = s!(2).public();
-            let l_vec = vec![two.mark_zero()];
-            let c_vec = vec![two.mark_zero()];
+            // w_vec.len() must be power of two
+            let w_vec_len = 2u32.pow(w_vec_len_exp);
+            let lc_vec_len = 2u32.pow(lc_vec_len_exp);
+            let mut w_vec = vec![rand; w_vec_len as usize];
+            let mut l_vec = vec![rand2; lc_vec_len as usize];
+            // w_vec and l_vec must not both be 0
+            if rand.is_zero() && rand2.is_zero() {
+                w_vec[0] = Scalar::one().mark_zero();
+            }
+            // the longer vector must not be all 0
+            if rand.is_zero() && w_vec.len() > l_vec.len() {
+                w_vec[0] = Scalar::one().mark_zero();
+            }
+            if rand2.is_zero() && l_vec.len() > w_vec.len() {
+                // maybe for the second vector at least one odd element must be non-zero
+                l_vec[1] = Scalar::one().mark_zero();
+            }
+
+            let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+            let c_vec = vec![s!(rand + rand2*rand2).public(); lc_vec_len as usize];
             let q = s!(r*r).public();
 
-            let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.to_vec(), l_vec.clone(), c_vec.clone(), r);
+            let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
 
             let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
             let v = NormProof::v(&w_vec.to_vec(), &l_vec, &c_vec, q);
@@ -593,6 +665,7 @@ mod tests{
             let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
             let Cp = Cp.non_zero().unwrap();
 
-            assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))        }
+            assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
+        }
     }
 }
