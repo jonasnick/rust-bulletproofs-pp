@@ -5,15 +5,15 @@ use crate::norm_arg::{self, NormProof};
 use merlin::Transcript;
 use norm_arg::BaseGens;
 use rand::{CryptoRng, RngCore};
-use secp256kfun::{Point, Scalar, g, G, s, marker::{Secret, Zero, Mark, Public, Jacobian, NonZero, Secrecy, ZeroChoice}};
+use secp256kfun::{Point, Scalar, g, G, s, marker::{Secret, Zero, Public, NonNormal, NonZero, Secrecy, ZeroChoice}};
 
 /// Round 1 artifacts
 #[derive(Debug, Clone)]
 struct Round1Commitments {
     /// Round 1 output: D
-    D: Point<Jacobian>,
+    D: Point<NonNormal>,
     /// Round 1 output: M
-    M: Point<Jacobian>,
+    M: Point<NonNormal>,
 }
 
 #[derive(Debug, Clone)]
@@ -35,7 +35,7 @@ struct Round1Secrets {
 #[derive(Debug, Clone)]
 struct Round2Commitments {
     /// Reciprocal commitment: R
-    R: Point<Jacobian>,
+    R: Point<NonNormal>,
 }
 
 #[derive(Debug, Clone)]
@@ -51,7 +51,7 @@ struct Round2Secrets {
 #[derive(Debug, Clone)]
 struct Round3Commitments {
     /// Round 3 blinding commitment S
-    S: Point<Jacobian, Public, NonZero>,
+    S: Point<NonNormal, Public, NonZero>,
 }
 
 #[derive(Debug, Clone)]
@@ -122,12 +122,12 @@ pub struct Proof {
 }
 
 // Create a commit C = vG + gamma*H_0
-pub fn commit(gens: &BaseGens, v: u64, gamma: &Scalar<Secret, Zero>) -> Point<Jacobian> {
+pub fn commit(gens: &BaseGens, v: u64, gamma: &Scalar<Secret, Zero>) -> Point<NonNormal> {
     let mut bytes = [0u8; 32];
     bytes[24..].copy_from_slice(&v.to_be_bytes());
-    let v = Scalar::from_bytes(bytes).unwrap();
+    let v = Scalar::<Secret, Zero>::from_bytes(bytes).unwrap();
     let h_0 = gens.H_vec[0];
-    g!(v * G + gamma * h_0).mark::<NonZero>().expect("Zero commitment")
+    g!(v * G + gamma * h_0).non_zero().expect("Zero commitment")
 }
 
 impl<'a> Prover<'a> {
@@ -167,7 +167,7 @@ impl<'a> Prover<'a> {
         let d = d.into_iter().map(|x| Scalar::from(x as u32)).collect::<Vec<_>>();
         let m = m.into_iter().map(|x| Scalar::from(x as u32)).collect::<Vec<_>>();
 
-        let mut l_m = std::iter::repeat(Scalar::random(rng).mark::<Zero>()).take(6).collect::<Vec<_>>();
+        let mut l_m = std::iter::repeat(Scalar::random(rng).mark_zero()).take(6).collect::<Vec<_>>();
         let mut l_d = std::iter::repeat(Scalar::zero()).take(6).collect::<Vec<_>>();
         l_d[4] = -l_m[5].clone();
         l_d[2] = -l_m[3].clone();
@@ -181,7 +181,7 @@ impl<'a> Prover<'a> {
     fn prove_round_2<R: CryptoRng + RngCore>(&mut self, rng: &mut R, e: Scalar<Public>) {
         // compute r_i = (1/ (e + d_i))
         let r = self.r1_sec.as_ref().unwrap().d.iter().
-            map(|x| s!(e + x).mark::<NonZero>().unwrap().invert().mark::<Zero>()).collect::<Vec<_>>();
+            map(|x| s!(e + x).non_zero().unwrap().invert().mark_zero()).collect::<Vec<_>>();
 
         let l_r = std::iter::repeat(Scalar::zero()).take(6).collect::<Vec<_>>();
         let (b_r, R) = bp_pp_comm(rng, &self.gens, &r, &l_r);
@@ -201,13 +201,13 @@ impl<'a> Prover<'a> {
         let alpha_r = alpha_r_q_inv_pow(self.num_digits(), x, e, &q_inv_pows);
         let alpha_d = alpha_d_q_inv_pow(self.base, self.num_digits(), &q_inv_pows);
         let alpha_m = alpha_m_q_inv_pows(e, x, self.base as usize, &q_inv_pows);
-        let alpha_m = alpha_m.into_iter().map(|x| x.mark::<Secret>()).collect::<Vec<_>>();
+        let alpha_m = alpha_m.into_iter().map(|x| x.secret()).collect::<Vec<_>>();
 
         let t_2 = add_vecs(&d, &alpha_r);
         let t_3 = add_vecs(&r, &alpha_d);
 
-        let s = std::iter::repeat(Scalar::random(rng).mark::<Zero>()).take(self.gens.G_vec.len()).collect::<Vec<_>>();
-        // let s = std::iter::repeat(Scalar::one().mark::<Zero>()).take(self.gens.G_vec.len()).collect::<Vec<_>>();
+        let s = std::iter::repeat(Scalar::random(rng).mark_zero()).take(self.gens.G_vec.len()).collect::<Vec<_>>();
+        // let s = std::iter::repeat(Scalar::one().mark_zero()).take(self.gens.G_vec.len()).collect::<Vec<_>>();
 
         let w_vec = Poly{
             coeffs: vec![s.clone(), m.clone(), t_2, t_3, alpha_m],
@@ -215,9 +215,8 @@ impl<'a> Prover<'a> {
 
         let w_w_q = w_vec.w_q_norm(q);
         dbg!(&w_w_q);
-        let zero = Scalar::zero().mark::<Public>();
         let y_inv = y.invert();
-        let y = y.mark::<Zero>();
+        let y = y.mark_zero();
         let c = c_poly(y);
         let two_gamma = s!(2*self.gamma);
         let mut l_vec = Poly {
@@ -265,7 +264,7 @@ impl<'a> Prover<'a> {
         for i in 0..s.len() {
             let s_i = &s[i];
             b_s = s!(b_s + q_pow * s_i * s_i);
-            q_pow = s!(q_pow * q).mark::<Public>();
+            q_pow = s!(q_pow * q).public();
         }
         // Test assertions
         {
@@ -274,7 +273,7 @@ impl<'a> Prover<'a> {
             let res = add_vecs(&w2, &l2);
 
             let v = vec![
-                -b_s.clone(), -b_d.clone().mark::<Zero>(), -b_m.clone().mark::<Zero>(), -b_r.clone().mark::<Zero>()
+                -b_s.clone(), -b_d.clone().mark_zero(), -b_m.clone().mark_zero(), -b_r.clone().mark_zero()
             ];
 
             let res2 = add_vecs(&res, &v);
@@ -293,8 +292,8 @@ impl<'a> Prover<'a> {
         }
 
         // Recompute the secret w
-        self.r3_sec = Some(Round3Secrets { b_s: b_s.mark::<NonZero>().unwrap(), w: w_vec, l: l_vec });
-        self.r3_comm = Some(Round3Commitments { S: S.mark::<NonZero>().unwrap() });
+        self.r3_sec = Some(Round3Secrets { b_s: b_s.non_zero().unwrap(), w: w_vec, l: l_vec });
+        self.r3_comm = Some(Round3Commitments { S: S.non_zero().unwrap() });
     }
 
     fn r1_challenge_e(&self, t: &mut Transcript) -> Scalar<Public> {
@@ -318,20 +317,20 @@ impl<'a> Prover<'a> {
         let r3_sec = self.r3_sec.unwrap();
         let w_eval = r3_sec.w.eval(t);
         let mut l_eval = r3_sec.l.eval(t);
-        l_eval.push(Scalar::zero().mark::<Public>());
-        l_eval.push(Scalar::zero().mark::<Public>());
+        l_eval.push(Scalar::zero());
+        l_eval.push(Scalar::zero());
         let t_pows = t_pows(t, self.gens.H_vec.len());
 
         let (t2, t3, t4, t6, t7) = (t_pows[2], t_pows[3], t_pows[4], t_pows[6], t_pows[7]);
         let c_vec = vec![
-            s!(y* t).mark::<Public>().mark::<Zero>(),
-            s!(y* t2).mark::<Public>().mark::<Zero>(),
-            s!(y* t3).mark::<Public>().mark::<Zero>(),
-            s!(y* t4).mark::<Public>().mark::<Zero>(),
-            s!(y* t6).mark::<Public>().mark::<Zero>(),
-            s!(y* t7).mark::<Public>().mark::<Zero>(),
-            Scalar::zero().mark::<Public>(),
-            Scalar::zero().mark::<Public>(),
+            s!(y* t).public().mark_zero(),
+            s!(y* t2).public().mark_zero(),
+            s!(y* t3).public().mark_zero(),
+            s!(y* t4).public().mark_zero(),
+            s!(y* t6).public().mark_zero(),
+            s!(y* t7).public().mark_zero(),
+            Scalar::zero(),
+            Scalar::zero(),
         ];
 
         let norm_prf = norm_arg::NormProof::prove(
@@ -458,42 +457,41 @@ impl<'a> Verifier<'a> {
 
         let t5 = &t_pows[5];
         let t4 = &t_pows[4];
-        let two_t_5 = s!(t5 + t5).mark::<Zero>().mark::<Public>();
+        let two_t_5 = s!(t5 + t5).mark_zero().public();
         let two_t_5_v = vec![two_t_5; self.num_digits()];
         let v_hat_1 = dot(&two_t_5_v, &q_pows);
 
         let v_hat_2 = dot(&alpha_d, &alpha_r2);
-        let v_hat_2 = s!(v_hat_2 * two_t_5).mark::<Zero>().mark::<Public>();
+        let v_hat_2 = s!(v_hat_2 * two_t_5).mark_zero().public();
 
         let v_hat_3 = dot(&alpha_d_q_inv_pow, &alpha_r);
-        let v_hat_3 = s!(v_hat_3 * two_t_5).mark::<Zero>().mark::<Public>();
+        let v_hat_3 = s!(v_hat_3 * two_t_5).mark_zero().public();
 
         let v_hat_4 = dot(&alpha_m_q_inv_pows, &alpha_m);
-        let v_hat_4 = s!(v_hat_4 * t4 * t4).mark::<Zero>().mark::<Public>();
+        let v_hat_4 = s!(v_hat_4 * t4 * t4).mark_zero().public();
 
         dbg!(s!(v_hat_1 + v_hat_2 + v_hat_3));
         dbg!(v_hat_4);
-        s!(v_hat_1 + v_hat_2 + v_hat_3 + v_hat_4).mark::<Zero>().mark::<Public>()
+        s!(v_hat_1 + v_hat_2 + v_hat_3 + v_hat_4).mark_zero().public()
     }
 
     pub fn verify(&self, transcript: &mut Transcript, prf: &Proof) -> bool {
         let e = self.r1_challenge_e(transcript, prf);
         let (x, y, r, q) = self.r2_challenges(transcript, prf);
         let t = self.r3_challenge(transcript, prf);
-        let zero = Scalar::zero().mark::<Public>();
-        let y = y.mark::<Zero>();
+        let y = y.mark_zero();
         let t_pows = t_pows(t, self.gens.H_vec.len());
 
         let (t2, t3, t4, t6, t7) = (t_pows[2], t_pows[3], t_pows[4], t_pows[6], t_pows[7]);
         let c_vec = vec![
-            s!(y* t).mark::<Public>(),
-            s!(y* t2).mark::<Public>(),
-            s!(y* t3).mark::<Public>(),
-            s!(y* t4).mark::<Public>(),
-            s!(y* t6).mark::<Public>(),
-            s!(y* t7).mark::<Public>(),
-            Scalar::zero().mark::<Public>(),
-            Scalar::zero().mark::<Public>(),
+            s!(y* t).public(),
+            s!(y* t2).public(),
+            s!(y* t3).public(),
+            s!(y* t4).public(),
+            s!(y* t6).public(),
+            s!(y* t7).public(),
+            Scalar::zero(),
+            Scalar::zero(),
         ];
 
         let v = norm_arg::NormProof::v(&prf.w, &prf.l, &c_vec, q);
@@ -520,8 +518,7 @@ impl<'a> Verifier<'a> {
         // Compute the commitment to the public values
         let g_offset = self.g_offset(e, x, q, t);
         println!("g_offset: {}", g_offset);
-        let ten = Scalar::from(10u32);
-        println!("total {}", s!(g_offset + ten));
+        println!("total {}", s!(g_offset + 10));
         let g_vec_pub_offsets = self.g_vec_pub_offsets(e, x, q, t);
 
         let Proof { r1_comm, r2_comm, r3_comm, w, l, norm_proof } = prf;
@@ -539,7 +536,7 @@ impl<'a> Verifier<'a> {
         //     let ten = Scalar::from(10u32);
         //     let one = Scalar::one();
         //     let (two, six) = (Scalar::from(2u32), Scalar::from(6u32));
-        //     let one_half = s!(one + one).mark::<NonZero>().unwrap().invert();
+        //     let one_half = s!(one + one).non_zero().unwrap().invert();
         //     let five = Scalar::from(5u32);
         //     let w1 = &s!(one_half + five);
         //     dbg!(&w1);
@@ -556,7 +553,7 @@ impl<'a> Verifier<'a> {
             dbg!(&l);
         }
         assert!(C1 == C);
-        assert!(norm_proof.verify(self.gens.clone(), transcript, C.normalize().mark::<NonZero>().unwrap(), &c_vec, r));
+        assert!(norm_proof.verify(self.gens.clone(), transcript, C.normalize().non_zero().unwrap(), &c_vec, r));
         C1 == C
     }
 }
@@ -570,7 +567,7 @@ fn r1_challenge_e(t: &mut merlin::Transcript, r1_comm: &Round1Commitments, n: u6
     t.append_message(b"D", &r1_comm.D.normalize().to_bytes());
     t.append_message(b"M", &r1_comm.M.normalize().to_bytes());
     merlin_scalar(t, b"e")
-    // Scalar::one().mark::<Public>()
+    // Scalar::one().public()
 }
 
 fn r2_challenges(t: &mut merlin::Transcript, r2_comm: &Round2Commitments) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
@@ -578,36 +575,36 @@ fn r2_challenges(t: &mut merlin::Transcript, r2_comm: &Round2Commitments) -> (Sc
     let x = merlin_scalar(t, b"x");
     let y = merlin_scalar(t, b"y");
     let r = merlin_scalar(t, b"r");
-    let q = s!(r * r).mark::<Public>();
+    let q = s!(r * r).public();
     (x, y, r, q)
-    // let two  = Scalar::from(2u32).mark::<Public>().mark::<NonZero>().unwrap();
-    // (Scalar::one().mark::<Public>(), Scalar::one().mark::<Public>(), Scalar::one().mark::<Public>())
+    // let two  = Scalar::from(2u32).public().non_zero().unwrap();
+    // (Scalar::one().public(), Scalar::one().public(), Scalar::one().public())
 }
 
 fn r3_challenge(t: &mut merlin::Transcript, r3_comm: &Round3Commitments) -> Scalar<Public> {
     t.append_message(b"S", &r3_comm.S.normalize().to_bytes());
     merlin_scalar(t, b"t")
-    // Scalar::from(3u32).mark::<Public>().mark::<NonZero>().unwrap()
-    // Scalar::from(1).mark::<Public>().mark::<NonZero>().unwrap()
+    // Scalar::from(3u32).public().non_zero().unwrap()
+    // Scalar::from(1).public().non_zero().unwrap()
 }
 
-fn bp_pp_comm<R: CryptoRng + RngCore>(rng: &mut R, gens: &BaseGens, w: &[Scalar<Secret, Zero>], l: &[Scalar<Secret, Zero>]) -> (Scalar, Point<Jacobian>) {
+fn bp_pp_comm<R: CryptoRng + RngCore>(rng: &mut R, gens: &BaseGens, w: &[Scalar<Secret, Zero>], l: &[Scalar<Secret, Zero>]) -> (Scalar, Point<NonNormal>) {
     let b_r = Scalar::random(rng);
 
-    let mut res = g!(b_r * G).mark::<Zero>();
+    let mut res = g!(b_r * G).mark_zero();
     for (g, w_i) in gens.G_vec.iter().zip(w.iter()) {
         res = g!(res + w_i * g);
     }
     for (h, l_i) in gens.H_vec.iter().zip(l.iter()) {
         res = g!(res + l_i * h);
     }
-    (b_r, res.mark::<NonZero>().unwrap())
+    (b_r, res.non_zero().unwrap())
 }
 
 fn merlin_scalar(t: &mut merlin::Transcript, label: &'static [u8]) -> Scalar<Public> {
     let mut bytes = [0u8; 32];
     t.challenge_bytes(label, &mut bytes);
-    Scalar::from_bytes(bytes).unwrap().mark::<NonZero>().unwrap().mark::<Public>()
+    Scalar::from_bytes(bytes).unwrap().non_zero().unwrap()
 }
 
 // Compute a vector with powers of q (q, q^2, q^3, ...)
@@ -616,7 +613,7 @@ fn q_pows(q: Scalar<Public>, n: usize) -> Vec<Scalar<Public>> {
     let mut q_pow = q;
     for _ in 0..n {
         res.push(q_pow);
-        q_pow = s!(q_pow * q).mark::<Public>();
+        q_pow = s!(q_pow * q).public();
     }
     res
 }
@@ -624,10 +621,10 @@ fn q_pows(q: Scalar<Public>, n: usize) -> Vec<Scalar<Public>> {
 // compute powers of t with (1, t, t^2, t^3, ...)
 fn t_pows(t: Scalar<Public>, n: usize) -> Vec<Scalar<Public>> {
     let mut res = Vec::with_capacity(n as usize);
-    let mut t_pow = Scalar::one().mark::<Public>();
+    let mut t_pow = Scalar::one();
     for _ in 0..n {
         res.push(t_pow);
-        t_pow = s!(t_pow * t).mark::<Public>();
+        t_pow = s!(t_pow * t).public();
     }
     res
 }
@@ -637,21 +634,19 @@ fn add_vecs<S: Secrecy, S2: Secrecy>(a: &[Scalar<S, Zero>], b: &[Scalar<S2, Zero
     let (a_len, b_len) = (a.len(), b.len());
     let res_len = std::cmp::max(a_len, b_len);
     let mut res = Vec::with_capacity(res_len);
-    let zero_s = Scalar::zero().mark::<S>();
-    let zero_pub = Scalar::zero().mark::<S2>();
     for i in 0..res_len {
-        let a_i = a.get(i).unwrap_or(&zero_s);
-        let b_i = b.get(i).unwrap_or(&zero_pub);
-        res.push(s!(a_i + b_i).mark::<S>());
+        let a_i = a.get(i).cloned().unwrap_or(s!(0).set_secrecy());
+        let b_i = b.get(i).cloned().unwrap_or(s!(0).set_secrecy());
+        res.push(s!(a_i + b_i).set_secrecy());
     }
     res
 }
 
 // Compute the dot product of two vectors
 fn dot<S: Secrecy, Z2: ZeroChoice>(a: &[Scalar<S, Zero>], b: &[Scalar<Public, Z2>]) -> Scalar<S, Zero> {
-    let mut res = Scalar::zero().mark::<S>().mark::<Zero>();
+    let mut res = Scalar::zero();
     for (a_i, b_i) in a.iter().zip(b.iter()) {
-        res = s!(res + a_i * b_i).mark::<S>().mark::<Zero>();
+        res = s!(res + a_i * b_i).set_secrecy().mark_zero();
     }
     res
 }
@@ -660,7 +655,7 @@ fn dot<S: Secrecy, Z2: ZeroChoice>(a: &[Scalar<S, Zero>], b: &[Scalar<Public, Z2
 fn scalar_mul_vec<S: Secrecy, Z: ZeroChoice>(a: &[Scalar<S, Z>], b: Scalar<Public>) -> Vec<Scalar<S, Zero>> {
     let mut res = Vec::with_capacity(a.len());
     for a_i in a.iter() {
-        res.push(s!(a_i * b).mark::<S>().mark::<Zero>());
+        res.push(s!(a_i * b).set_secrecy().mark_zero());
     }
     res
 }
@@ -670,7 +665,7 @@ fn hadamard<S: Secrecy, Z: ZeroChoice>(a: &[Scalar<S, Z>], b: &[Scalar<Public>])
     // assert_eq!(a.len(), b.len());
     let mut res = Vec::with_capacity(a.len());
     for (a_i, b_i) in a.iter().zip(b.iter()) {
-        res.push(s!(a_i * b_i).mark::<S>().mark::<Zero>());
+        res.push(s!(a_i * b_i).set_secrecy().mark_zero());
     }
     res
 }
@@ -682,7 +677,7 @@ fn q_inv_pows(q: Scalar<Public>, n: usize) -> Vec<Scalar<Public>> {
     let mut q_inv_pow = q_inv;
     for _ in 0..n {
         res.push(q_inv_pow);
-        q_inv_pow = s!(q_inv_pow * q_inv).mark::<Public>();
+        q_inv_pow = s!(q_inv_pow * q_inv).public();
     }
     res
 }
@@ -697,12 +692,12 @@ fn alpha_d_q_inv_pow(b: u64, n: usize, q_inv_pows: &[Scalar<Public>]) -> Vec<Sca
 /// Compute a vector of powers of b (1, b, b^2, b^3, ...)
 /// Size must be number of digits
 fn alpha_d(b: u64, n: usize) -> Vec<Scalar<Public, Zero>> {
-    let b = Scalar::from(b as u32).mark::<Public>();
+    let b = Scalar::<Public, _>::from(b as u32);
     let mut res = Vec::with_capacity(n as usize);
-    let mut b_pow = Scalar::one().mark::<Public>().mark::<Zero>();
+    let mut b_pow = Scalar::<Public>::one().mark_zero();
     for _ in 0..n {
         res.push(b_pow);
-        b_pow = s!(b_pow * b).mark::<Public>();
+        b_pow = s!(b_pow * b).public();
     }
     res
 }
@@ -717,11 +712,10 @@ fn alpha_m_q_inv_pows(e: Scalar<Public>, x: Scalar<Public>, n: usize, q_inv_pows
 fn alpha_m(e: Scalar<Public>, x: Scalar<Public>, n: usize) -> Vec<Scalar<Public, Zero>> {
     let mut res = Vec::with_capacity(n as usize);
     let mut curr_e = e;
-    let one = Scalar::one().mark::<Public>();
     for _ in 0..n {
         let curr_e_inv = curr_e.invert();
-        res.push(s!(curr_e_inv * x).mark::<Public>().mark::<Zero>());
-        curr_e = s!(curr_e + one).mark::<Public>().mark::<NonZero>().unwrap();
+        res.push(s!(curr_e_inv * x).public().mark_zero());
+        curr_e = s!(curr_e + 1).public().non_zero().unwrap();
     }
     res
 }
@@ -736,21 +730,21 @@ fn alpha_r_q_inv_pow(n: usize, x: Scalar<Public>, e: Scalar<Public>, q_inv_pows:
 // Compute a vector of scalar -x
 fn alpha_r(n: usize, x: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
     let mut res = Vec::with_capacity(n as usize);
-    let minus_one = Scalar::minus_one().mark::<Public>();
+    let minus_one = Scalar::<Public,_>::minus_one().public();
     for _ in 0..n {
-        res.push(s!(minus_one * x).mark::<Public>().mark::<Zero>());
+        res.push(s!(minus_one * x).public().mark_zero());
     }
     res
 }
 
 // Compute a vector of [e, e, e, e]
 fn alpha_r2(n: usize, e: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
-    std::iter::repeat(e).map(|e| e.mark::<Zero>()).take(n).collect()
+    std::iter::repeat(e).map(|e| e.mark_zero()).take(n).collect()
 }
 
 // obtain the c poly
 fn c_poly(y: Scalar<Public, Zero>) -> Poly<Public> {
-    let zero = Scalar::zero().mark::<Public>();
+    let zero = Scalar::zero();
     Poly {
         coeffs: vec![vec![zero], vec![y], vec![y], vec![y], vec![y], vec![zero], vec![y], vec![y]],
     }
@@ -774,21 +768,21 @@ impl<S: Secrecy> Poly<S> {
 
     // evaluate the poly at t
     fn eval(&self, t: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
-        let mut res = vec![Scalar::zero().mark::<Public>(); self.coeffs[0].len()];
-        let mut t_pow = Scalar::one().mark::<Public>();
+        let mut res = vec![Scalar::zero(); self.coeffs[0].len()];
+        let mut t_pow = Scalar::one();
         for coeffs in self.coeffs.iter() {
             for (i, coeff) in coeffs.iter().enumerate() {
                 let curr = &res[i];
-                res[i] = s!(curr + t_pow * coeff).mark::<Secret>().mark::<Zero>().mark::<Public>();
+                res[i] = s!(curr + t_pow * coeff).secret().mark_zero().public();
             }
-            t_pow = s!(t_pow * t).mark::<Public>();
+            t_pow = s!(t_pow * t).public();
         }
         res
     }
 
     // Compute the inner product of two polynomials
     fn w_q_norm(&self, q: Scalar<Public>) -> Vec<Scalar<S, Zero>> {
-        let mut res = vec![Scalar::zero().mark::<S>(); 2 * self.coeffs.len() - 1];
+        let mut res = vec![Scalar::zero(); 2 * self.coeffs.len() - 1];
         for i in 0..self.coeffs.len() {
             for j in 0..self.coeffs.len() {
                 let mut q_pow_i = q;
@@ -799,10 +793,10 @@ impl<S: Secrecy> Poly<S> {
                 for k in 0..min_len {
                     let (a_k, b_k) = (&a[k], &b[k]);
                     inner_prod = s!(inner_prod + a_k * b_k * q_pow_i);
-                    q_pow_i = s!(q_pow_i * q).mark::<Public>();
+                    q_pow_i = s!(q_pow_i * q).public();
                 }
                 let res_prev = &res[i + j];
-                res[i + j] = s!(res_prev +  inner_prod).mark::<S>();
+                res[i + j] = s!(res_prev +  inner_prod).set_secrecy::<S>();
             }
         }
         res
@@ -810,7 +804,7 @@ impl<S: Secrecy> Poly<S> {
 
     // mul c poly
     fn mul_c(&self, c: &Poly<Public>) -> Vec<Scalar<S, Zero>> {
-        let mut res = vec![Scalar::zero().mark::<S>(); self.coeffs.len() + c.coeffs.len() - 1];
+        let mut res = vec![Scalar::zero(); self.coeffs.len() + c.coeffs.len() - 1];
         for l in 0..self.coeffs.len() {
             let l_vec = &self.coeffs[l];
             for i in 0..l_vec.len() {
@@ -822,7 +816,7 @@ impl<S: Secrecy> Poly<S> {
                 let c_i = &c.coeffs[t_pow_in_c][0]; // c_vec has exactly one element
                 let inner_prod = s!(l_i * c_i);
                 let res_prev = &res[l + t_pow_in_c];
-                res[l + t_pow_in_c] = s!(res_prev +  inner_prod).mark::<S>();
+                res[l + t_pow_in_c] = s!(res_prev +  inner_prod).set_secrecy();
             }
         }
         res
@@ -871,20 +865,20 @@ mod tests{
 
     #[test]
     fn test_inner_prod() {
-        let q = Scalar::from(2).mark::<NonZero>().unwrap().mark::<Public>();
-        let a = Poly {
+        let q = s!(2).public();
+        let a = Poly::<Secret> {
             coeffs: vec![
                 vec![Scalar::from(1), Scalar::from(2)],
                 vec![Scalar::from(1), Scalar::from(2)],
             ]
         };
-        let b = Poly {
+        let b = Poly::<Secret> {
             coeffs: vec![
                 vec![Scalar::from(3), Scalar::from(4)],
                 vec![Scalar::from(3), Scalar::from(4)],
             ]
         };
         let res = a.w_q_norm(q);
-        assert_eq!(res, vec![Scalar::from(18), Scalar::from(36), Scalar::from(18)]);
+        assert_eq!(res, vec![s!(18), s!(36), s!(18)]);
     }
 }
