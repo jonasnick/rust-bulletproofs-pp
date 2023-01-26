@@ -308,10 +308,6 @@ impl NormProof {
             q = q_sq;
         }
 
-        if w[0].is_zero() && l[0].is_zero() {
-            panic!("inputs w and l were 0 vectors");
-        }
-
         Self {
             x_vec: X_vec,
             r_vec: R_vec,
@@ -396,12 +392,12 @@ impl NormProof {
         &self,
         gens: BaseGens,
         transcript: &mut merlin::Transcript,
-        C: Point,
+        C: Point::<Normal, Public, Zero>,
         c: &[PubScalarZ],
         r: PubScalarNz,
     ) -> bool {
         // Verify that n^2 + l = v for the given commitment.
-        let C_i = C.non_normal().mark_zero();
+        let C_i = C.non_normal();
         let mut q = s!(r * r).public();
         // Factors with which we multiply the generators.
         let (challenges, s_g, s_h) =
@@ -498,7 +494,7 @@ pub(crate) fn tester(sz_w: u32, sz_l: u32) {
     assert!(prf.verify(
         gens,
         &mut transcript,
-        C.normalize().non_zero().unwrap(),
+        C.normalize(),
         &c,
         r,
     ))
@@ -549,7 +545,7 @@ fn bench_prover(ct: &mut Criterion) {
     let q = s!(r*r).public();
     let v = NormProof::v(&w, &l, &c, q);
     let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w.iter(), &l.iter());
-    let C = C.normalize().non_zero().unwrap();
+    let C = C.normalize();
     let mut transcript = Transcript::new(b"test");
     // test norm argument prove
     let prf = NormProof::prove(&mut transcript, gens.clone(), w, l, c.clone(), r);
@@ -592,12 +588,11 @@ mod tests{
         let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
 
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
-        let Cp = Cp.non_zero().unwrap();
 
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
     }
 
-    // w_vec and l_vec (and therefore v) are 0, proving panics
+    // w_vec and l_vec (and therefore v) are 0
     #[test]
     fn test_norm_arg_zeros() {
         let w_vec = vec![Scalar::zero()];
@@ -612,11 +607,15 @@ mod tests{
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
         assert_eq!(Cp, Point::<Normal, Public, Zero>::zero());
 
-        let result = std::panic::catch_unwind(|| NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r));
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+
+        let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+        assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
+
     }
 
     // If w is longer than l and w only contains zeros then X is the point at infinity.
-    // Same if l is longer than w and only contains zeros then X or R (TODO) are the point at infinity.
+    // Same if l is longer than w and only contains zeros then X or R (TODO: which one?) are the point at infinity.
     #[test]
     fn test_norm_arg_zeros2() {
         let w_vec = vec![Scalar::zero(), Scalar::zero()];
@@ -631,7 +630,6 @@ mod tests{
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
         let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
-        let Cp = Cp.non_zero().unwrap();
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
 
         let l_vec = w_vec;
@@ -643,7 +641,6 @@ mod tests{
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
         let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
-        let Cp = Cp.non_zero().unwrap();
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
     }
 
@@ -672,7 +669,6 @@ mod tests{
                 let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
                 let v = NormProof::v(&w_vec.to_vec(), &l_vec, &c_vec, q);
                 let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
-                let Cp = Cp.non_zero().unwrap();
                 assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
             }
         }
@@ -688,7 +684,7 @@ mod tests{
                            l in any::<Scalar<Public, Zero>>()) {
 
             let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-            let Cp = g!(43*G).normalize();
+            let Cp = g!(43*G).normalize().mark_zero();
             let gens = BaseGens::new(X.len() as u32, R.len() as u32);
             let q = s!(r*r).public();
 

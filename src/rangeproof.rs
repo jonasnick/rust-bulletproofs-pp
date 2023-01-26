@@ -553,7 +553,7 @@ impl<'a> Verifier<'a> {
             dbg!(&l);
         }
         assert!(C1 == C);
-        assert!(norm_proof.verify(self.gens.clone(), transcript, C.normalize().non_zero().unwrap(), &c_vec, r));
+        assert!(norm_proof.verify(self.gens.clone(), transcript, C.normalize(), &c_vec, r));
         C1 == C
     }
 }
