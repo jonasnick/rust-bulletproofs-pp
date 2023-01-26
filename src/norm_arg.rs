@@ -648,12 +648,13 @@ mod tests{
     }
 
     proptest! {
+        // test that honest proof must verify
         #[test]
-        fn norm_arg(rand in any::<Scalar<Public, Zero>>(),
-                    rand2 in any::<Scalar<Public, Zero>>(),
-                    w_vec_len_exp in 0u32..4,
-                    lc_vec_len_exp in 0u32..4,
-                    r in any::<Scalar<Public, NonZero>>()) {
+        fn norm_arg_completeness(rand in any::<Scalar<Public, Zero>>(),
+                                 rand2 in any::<Scalar<Public, Zero>>(),
+                                 w_vec_len_exp in 0u32..3,
+                                 lc_vec_len_exp in 0u32..3,
+                                 r in any::<Scalar<Public, NonZero>>()) {
             let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
             // w_vec.len() must be power of two
             let w_vec_len = 2u32.pow(w_vec_len_exp);
@@ -674,6 +675,31 @@ mod tests{
                 let Cp = Cp.non_zero().unwrap();
                 assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
             }
+        }
+
+        // test that an arbitrary proof doesn't verify
+        #[test]
+        fn norm_arg_verify(r in any::<Scalar<Public, NonZero>>(),
+                           c_vec in any::<[Scalar<Public, Zero>; 2]>(),
+                           X in any::<[Point<Normal, Public, Zero>; 2]>(),
+                           R in any::<[Point<Normal, Public, Zero>; 2]>(),
+                           len in 1..2usize,
+                           n in any::<Scalar<Public, Zero>>(),
+                           l in any::<Scalar<Public, Zero>>()) {
+
+            let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
+            let Cp = g!(43*G).normalize();
+            let gens = BaseGens::new(X.len() as u32, R.len() as u32);
+            let q = s!(r*r).public();
+
+            let proof = NormProof {
+                x_vec: X[0..len].to_vec(),
+                r_vec: R[0..len].to_vec(),
+                n: n,
+                l: l,
+            };
+
+            assert!(!proof.verify(gens, &mut transcript, Cp, &c_vec[0..len], r));
         }
     }
 }
