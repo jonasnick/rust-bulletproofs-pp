@@ -151,8 +151,7 @@ where
 fn scalar_challenge(t: &mut merlin::Transcript) -> PubScalarNz {
     let mut dest = [0u8; 32];
     t.challenge_bytes(b"e", &mut dest);
-    // let e = Scalar::from_bytes(dest).unwrap().non_zero().unwrap();
-    let e = s!(2).public();
+    let e = Scalar::from_bytes(dest).unwrap().non_zero().unwrap();
     e
 }
 
@@ -490,17 +489,6 @@ pub(crate) fn tester(sz_n: u32, sz_l: u32) {
         r,
     ))
 }
-
-// fn main() {
-//     tester(4, 1);
-    // tester(1, 2);
-    // tester(1, 4);
-    // tester(1, 8);
-    // tester(4, 1);
-    // tester(8, 1);
-    // tester(2, 2);
-    // tester(4, 4);
-// }
 
 #[cfg(test)]
 mod tests{
