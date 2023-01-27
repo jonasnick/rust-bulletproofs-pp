@@ -370,16 +370,17 @@ impl NormProof {
         (challenges, s_g, s_h)
     }
 
+    /// Verify that C = v*G + <n_vec, gens.G_vec> + <l_vec, gens.H_vec>
+    /// where v = <n_vec, n_vec>_(r^2) + <c_vec, l_vec>
     pub fn verify(
         &self,
         gens: BaseGens,
         transcript: &mut merlin::Transcript,
         C: Point::<Normal, Public, Zero>,
-        c: &[PubScalarZ],
+        c_vec: &[PubScalarZ],
         r: PubScalarNz,
     ) -> bool {
         // Verify that n^2 + l = v for the given commitment.
-        let C_i = C.non_normal();
         let mut q = s!(r * r).public();
         // Factors with which we multiply the generators.
         let (challenges, s_g, s_h) =
@@ -390,8 +391,7 @@ impl NormProof {
             q = s!(q * q).public();
         }
 
-        let s_c = Self::s_vec(gens.H_vec.len(), &challenges);
-        let l_c = inner_product(&s_c.iter(), &c.iter());
+        let l_c = inner_product(&s_h.iter(), &c_vec.iter());
 
         let v = s!(self.n * self.n * q + self.l * l_c);
 
@@ -408,7 +408,7 @@ impl NormProof {
             .into_iter()
             .collect::<Vec<_>>();
 
-        let point_iter = std::iter::once(C_i)
+        let point_iter = std::iter::once(C.non_normal())
             .chain(self.x_vec.iter().copied().map(|X| X.non_normal()))
             .chain(self.r_vec.iter().copied().map(|R| R.non_normal()))
             .into_iter()
