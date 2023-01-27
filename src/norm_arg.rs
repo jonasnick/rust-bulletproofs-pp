@@ -156,7 +156,8 @@ fn scalar_challenge(t: &mut merlin::Transcript) -> PubScalarNz {
 }
 
 impl NormProof {
-    /// Compute v = |n|^2_q + <l, c>
+    /// Compute v = <n_vec, n_vec>^2_q + <l, c>
+
     pub(crate) fn v(
         n_vec: &[PubScalarZ],
         l_vec: &[PubScalarZ],
@@ -170,25 +171,24 @@ impl NormProof {
         s!(n_sq + l_c).public()
     }
 
-    /// Prove that |n|^2_q + <l, c> = v
-    /// Use the challenge as r and compute q = r^2
+    /// Prove that <n_vec, n_vec>^2_(r^2) + <l, c> = v
     pub fn prove(
         transcript: &mut merlin::Transcript,
         mut gens: BaseGens,
-        mut n: Vec<Scalar<Public, Zero>>,
-        mut l: Vec<Scalar<Public, Zero>>,
-        mut c: Vec<Scalar<Public, Zero>>,
+        mut n_vec: Vec<Scalar<Public, Zero>>,
+        mut l_vec: Vec<Scalar<Public, Zero>>,
+        mut c_vec: Vec<Scalar<Public, Zero>>,
         mut r: Scalar<Public>,
     ) -> Self {
-        let mut n_len = n.len();
-        let mut l_len = l.len();
+        let mut n_len = n_vec.len();
+        let mut l_len = l_vec.len();
 
         let mut Gs = &mut gens.G_vec[..];
         let mut Hs = &mut gens.H_vec[..];
 
-        let mut n = &mut n[..];
-        let mut l = &mut l[..];
-        let mut c = &mut c[..];
+        let mut n = &mut n_vec[..];
+        let mut l = &mut l_vec[..];
+        let mut c = &mut c_vec[..];
 
         assert_eq!(Gs.len(), n_len);
         assert_eq!(c.len(), l_len);
@@ -302,21 +302,8 @@ impl NormProof {
         }
     }
 
-    fn g_vec_r_coeffs(n: usize) -> Vec<u64> {
-        let mut r_factors = Vec::with_capacity(n);
-        r_factors.push(0u64);
-
-        for i in 1..n {
-            let lg_i = log(i);
-            let k = 1 << lg_i;
-
-            let r_val = 1 << lg_i;
-            let r_not_last_set_bit = r_factors[i - k];
-            r_factors.push(r_val + r_not_last_set_bit);
-        }
-        r_factors
-    }
-
+    // Return a vector of length n where the i-th element of the vector is equal to
+    // product(j=0...challenges.len(), binary(i)[j]* e[j])
     fn s_vec(n: usize, challenges: &[PubScalarNz]) -> Vec<PubScalarZ> {
         let mut s = Vec::with_capacity(n);
         s.push(s!(1).public().mark_zero());
@@ -353,7 +340,6 @@ impl NormProof {
         // Similar to s used in dalek crypto bp implementation, but modified for bp++
         let mut s_g = Self::s_vec(g_n, &challenges);
         let s_h = Self::s_vec(h_n, &challenges);
-        let r_pow_perm = Self::g_vec_r_coeffs(g_n);
 
         // Compute g_n powers of q
         let mut r_pows = Vec::with_capacity(g_n);
@@ -362,9 +348,10 @@ impl NormProof {
             let last = r_pows[i - 1];
             r_pows.push(s!(last * r).public());
         }
-        // Compute s_g * q_pow_perm
+        // Compute s_g = s_g * q_pow_perm
+        // where q_pows_perm[i] = r^(2^g_n - 1 - i)
         for i in 0..g_n {
-            let (s_g_i, q_pow_perm_i) = (s_g[i], r_pows[g_n - 1 - r_pow_perm[i] as usize]);
+            let (s_g_i, q_pow_perm_i) = (s_g[i], r_pows[g_n - 1 - i as usize]);
             s_g[i] = s!(s_g_i * q_pow_perm_i).public();
         }
         (challenges, s_g, s_h)
@@ -380,6 +367,8 @@ impl NormProof {
         c_vec: &[PubScalarZ],
         r: PubScalarNz,
     ) -> bool {
+        // TODO: make sure the provided number of generators match with the proof
+
         // Verify that n^2 + l = v for the given commitment.
         let mut q = s!(r * r).public();
         // Factors with which we multiply the generators.
@@ -513,7 +502,13 @@ mod tests{
 
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r))
+        assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r));
+
+        tester(4,2);
+        tester(32,16);
+        tester(8,64);
+        tester(4,8);
+        tester(32,1);
     }
 
     // n_vec and l_vec (and therefore v) are 0. This is fine
@@ -583,6 +578,7 @@ mod tests{
             let proof = NormProof::prove(&mut ts(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
             let v = NormProof::v(&n_vec.to_vec(), &l_vec, &c_vec, q);
             let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+            let gens = BaseGens::new(n_vec.len() as u32, l_vec.len() as u32);
             assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r))
         }
 
