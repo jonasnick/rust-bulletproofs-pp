@@ -156,53 +156,52 @@ fn scalar_challenge(t: &mut merlin::Transcript) -> PubScalarNz {
 }
 
 impl NormProof {
-    /// Compute v = |w|^2_q + <l, c>
+    /// Compute v = |n|^2_q + <l, c>
     pub(crate) fn v(
-        w_vec: &[PubScalarZ],
+        n_vec: &[PubScalarZ],
         l_vec: &[PubScalarZ],
         c_vec: &[PubScalarZ],
         q: PubScalarNz,
     ) -> Scalar<Public, Zero> {
-        let w_sq = weighted_inner_product(&w_vec.iter(), &w_vec.iter(), q);
+        let n_sq = weighted_inner_product(&n_vec.iter(), &n_vec.iter(), q);
         // Compute <l, c>
         let l_c = inner_product(&l_vec.iter(), &c_vec.iter());
         // Compute v = w*w*q + <l, c>
-        s!(w_sq + l_c).public()
+        s!(n_sq + l_c).public()
     }
 
-    /// Prove that |w|^2_q + <l, c> = v
+    /// Prove that |n|^2_q + <l, c> = v
     /// Use the challenge as r and compute q = r^2
-    /// w and l must not both be the zero vector
     pub fn prove(
         transcript: &mut merlin::Transcript,
         mut gens: BaseGens,
-        mut w: Vec<Scalar<Public, Zero>>,
+        mut n: Vec<Scalar<Public, Zero>>,
         mut l: Vec<Scalar<Public, Zero>>,
         mut c: Vec<Scalar<Public, Zero>>,
         mut r: Scalar<Public>,
     ) -> Self {
-        let mut w_n = w.len();
-        let mut l_n = l.len();
+        let mut n_len = n.len();
+        let mut l_len = l.len();
 
         let mut Gs = &mut gens.G_vec[..];
         let mut Hs = &mut gens.H_vec[..];
 
-        let mut w = &mut w[..];
+        let mut n = &mut n[..];
         let mut l = &mut l[..];
         let mut c = &mut c[..];
 
-        assert_eq!(Gs.len(), w_n);
-        assert_eq!(c.len(), l_n);
-        assert_eq!(Hs.len(), l_n);
-        assert!(w_n.is_power_of_two());
-        assert!(l_n.is_power_of_two());
+        assert_eq!(Gs.len(), n_len);
+        assert_eq!(c.len(), l_len);
+        assert_eq!(Hs.len(), l_len);
+        assert!(n_len.is_power_of_two());
+        assert!(l_len.is_power_of_two());
 
-        let ln_n = std::cmp::max(l_n, w_n).next_power_of_two();
+        let ln_n = std::cmp::max(l_len, n_len).next_power_of_two();
         let mut X_vec = Vec::with_capacity(ln_n);
         let mut R_vec = Vec::with_capacity(ln_n);
         let mut q = s!(r * r).public();
 
-        let v_init = Self::v(w, l, c, q);
+        let v_init = Self::v(n, l, c, q);
         let mut v_final = v_init;
 
         fn alter_iter<T>(
@@ -216,9 +215,9 @@ impl NormProof {
             (iter0, iter1)
         }
 
-        while w_n != 1 || l_n != 1 {
+        while n_len != 1 || l_len != 1 {
             let (r_inv, r_old, q_old, q_sq, e) = {
-                let (w0, w1) = alter_iter(w);
+                let (w0, w1) = alter_iter(n);
                 let (g0, g1) = alter_iter(Gs);
 
 
@@ -276,19 +275,19 @@ impl NormProof {
                 let e = s!(2).public();
                 (r_inv, r, q, q_sq, e)
             };
-            if w_n > 1 {
+            if n_len > 1 {
                 let mut i = 0;
-                while i < w_n {
-                    let (wl, wr, gl, gr) = (w[i], w[i + 1], Gs[i], Gs[i + 1]);
-                    w[i/2] = s!(r_inv * wl + e * wr).public();
+                while i < n_len {
+                    let (wl, wr, gl, gr) = (n[i], n[i + 1], Gs[i], Gs[i + 1]);
+                    n[i/2] = s!(r_inv * wl + e * wr).public();
                     Gs[i/2] = g!(r * gl + e * gr).non_zero().unwrap();
                     i = i + 2;
                 }
             }
 
-            if l_n > 1 {
+            if l_len > 1 {
                 let mut i = 0;
-                while i < l_n {
+                while i < l_len {
                     let (cl, cr, hl, hr) = (c[i], c[i + 1], Hs[i], Hs[i + 1]);
                     let (ll, lr) = (l[i], l[i + 1]);
                     c[i/2] = s!(cl + e * cr).public();
@@ -297,13 +296,13 @@ impl NormProof {
                     i += 2;
                 }
             }
-            w_n = (w_n + 1) / 2; // Adding 1 ensures that stop at 1 and don't go to zero.
-            l_n = (l_n + 1) / 2;
-            w = &mut w[..w_n];
-            Gs = &mut Gs[..w_n];
-            l = &mut l[..l_n];
-            c = &mut c[..l_n];
-            Hs = &mut Hs[..l_n];
+            n_len = (n_len + 1) / 2; // Adding 1 ensures that stop at 1 and don't go to zero.
+            l_len = (l_len + 1) / 2;
+            n = &mut n[..n_len];
+            Gs = &mut Gs[..n_len];
+            l = &mut l[..l_len];
+            c = &mut c[..l_len];
+            Hs = &mut Hs[..l_len];
             r = q_old;
             q = q_sq;
         }
@@ -311,7 +310,7 @@ impl NormProof {
         Self {
             x_vec: X_vec,
             r_vec: R_vec,
-            n: w[0],
+            n: n[0],
             l: l[0],
         }
     }
@@ -457,18 +456,18 @@ fn rand_scalar_vec(l: u32) -> Vec<PubScalarZ> {
     (0..l).map(|_| rand_scalar()).collect()
 }
 
-pub(crate) fn tester(sz_w: u32, sz_l: u32) {
-    let gens = BaseGens::new(sz_w, sz_l);
+pub(crate) fn tester(sz_n: u32, sz_l: u32) {
+    let gens = BaseGens::new(sz_n, sz_l);
 
     let mut transcript = Transcript::new(b"test");
 
-    let mut w = rand_scalar_vec(sz_w);
+    let mut n = rand_scalar_vec(sz_n);
     let mut l = rand_scalar_vec(sz_l);
     let mut c = rand_scalar_vec(sz_l);
-    w[0] = s!(1).public().mark_zero();
-    w[1] = s!(3).public().mark_zero();
-    w[2] = s!(5).public().mark_zero();
-    w[3] = s!(7).public().mark_zero();
+    n[0] = s!(1).public().mark_zero();
+    n[1] = s!(3).public().mark_zero();
+    n[2] = s!(5).public().mark_zero();
+    n[3] = s!(7).public().mark_zero();
 
     l[0] = Scalar::zero();
     c[0] = Scalar::zero();
@@ -476,18 +475,17 @@ pub(crate) fn tester(sz_w: u32, sz_l: u32) {
     let r = s!(2).public();
     let q = s!(r * r).public();
 
-    let v = NormProof::v(&w, &l, &c, q);
-    let (w_0, l_0, c_0) = (w[0], l[0], c[0]);
+    let v = NormProof::v(&n, &l, &c, q);
 
     let C = bp_comm(
         v,
         &gens.G_vec.iter(),
         &gens.H_vec.iter(),
-        &w.iter(),
+        &n.iter(),
         &l.iter(),
     );
     // test norm argument prove
-    let prf = NormProof::prove(&mut transcript, gens.clone(), w, l, c.clone(), r);
+    let prf = NormProof::prove(&mut transcript, gens.clone(), n, l, c.clone(), r);
     dbg!(&prf);
 
     let mut transcript = Transcript::new(b"test");
@@ -513,11 +511,11 @@ pub(crate) fn tester(sz_w: u32, sz_l: u32) {
 use criterion::{black_box, criterion_group, criterion_main, BatchSize, Criterion};
 
 fn bench_prover(ct: &mut Criterion) {
-    let sz_w = 64;
+    let sz_n = 64;
     let sz_l = 8;
-    let gens = BaseGens::new(sz_w, sz_l);
+    let gens = BaseGens::new(sz_n, sz_l);
 
-    let w = rand_scalar_vec(sz_w);
+    let n = rand_scalar_vec(sz_n);
     let l = rand_scalar_vec(sz_l);
     let c = rand_scalar_vec(sz_l);
 
@@ -530,25 +528,25 @@ fn bench_prover(ct: &mut Criterion) {
             || {
                 (
                     gens.clone(),
-                    w.clone(),
+                    n.clone(),
                     l.clone(),
                     c.clone(),
                     q,
                     Transcript::new(b"test"),
                 )
             },
-            |(gens, w, l, c, q, mut transcript)| NormProof::prove(&mut transcript, gens, w, l, c, q),
+            |(gens, n, l, c, q, mut transcript)| NormProof::prove(&mut transcript, gens, n, l, c, q),
             BatchSize::SmallInput
         )
     });
     let r = rand_scalar().non_zero().unwrap();
     let q = s!(r*r).public();
-    let v = NormProof::v(&w, &l, &c, q);
-    let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w.iter(), &l.iter());
+    let v = NormProof::v(&n, &l, &c, q);
+    let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n.iter(), &l.iter());
     let C = C.normalize();
     let mut transcript = Transcript::new(b"test");
     // test norm argument prove
-    let prf = NormProof::prove(&mut transcript, gens.clone(), w, l, c.clone(), r);
+    let prf = NormProof::prove(&mut transcript, gens.clone(), n, l, c.clone(), r);
 
     ct.bench_function("verifier", |b| {
         b.iter_batched(
@@ -576,71 +574,71 @@ mod tests{
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
         let gens = BaseGens::new(1, 1);
         let two = s!(2).public();
-        let w_vec = vec![two.mark_zero()];
+        let n_vec = vec![two.mark_zero()];
         let l_vec = vec![two.mark_zero()];
         let c_vec = vec![two.mark_zero()];
         let r = two;
         let q = s!(r*r).public();
 
-        let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let proof = NormProof::prove(&mut transcript, gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
 
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
 
-        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
 
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
     }
 
-    // w_vec and l_vec (and therefore v) are 0
+    // n_vec and l_vec (and therefore v) are 0. This is fine
     #[test]
     fn test_norm_arg_zeros() {
-        let w_vec = vec![Scalar::zero()];
+        let n_vec = vec![Scalar::zero()];
         let l_vec = vec![Scalar::zero()];
-        let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+        let gens = BaseGens::new(n_vec.len() as u32, l_vec.len() as u32);
         let c_vec = vec![rand_scalar().mark_zero()];
         let r = Scalar::random(&mut rand::thread_rng()).public();
         let q = s!(r*r).public();
 
-        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         assert_eq!(v, Scalar::<Public, Zero>::zero());
-        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         assert_eq!(Cp, Point::<Normal, Public, Zero>::zero());
 
-        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
 
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
 
     }
 
-    // If w is longer than l and w only contains zeros then X is the point at infinity.
-    // Same if l is longer than w and only contains zeros then X or R (TODO: which one?) are the point at infinity.
+    // If n is longer than l and w only contains zeros then X is the point at infinity.
+    // Same if l is longer than n and only contains zeros then X or R (TODO: which one?) are the point at infinity.
     #[test]
     fn test_norm_arg_zeros2() {
-        let w_vec = vec![Scalar::zero(), Scalar::zero()];
+        let n_vec = vec![Scalar::zero(), Scalar::zero()];
         let l_vec = vec![rand_scalar()];
-        let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+        let gens = BaseGens::new(n_vec.len() as u32, l_vec.len() as u32);
         let c_vec = vec![rand_scalar().mark_zero()];
         let r = Scalar::random(&mut rand::thread_rng()).public();
         let q = s!(r*r).public();
 
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
-        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
 
-        let l_vec = w_vec;
-        let w_vec = vec![rand_scalar()];
+        let l_vec = n_vec;
+        let n_vec = vec![rand_scalar()];
         let c_vec = vec![rand_scalar().mark_zero(); l_vec.len()];
-        let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
+        let gens = BaseGens::new(n_vec.len() as u32, l_vec.len() as u32);
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-        let v = NormProof::v(&w_vec, &l_vec, &c_vec, q);
-        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
+        let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r));
     }
 
@@ -649,26 +647,26 @@ mod tests{
         #[test]
         fn norm_arg_completeness(rand in any::<Scalar<Public, Zero>>(),
                                  rand2 in any::<Scalar<Public, Zero>>(),
-                                 w_vec_len_exp in 0u32..3,
-                                 lc_vec_len_exp in 0u32..3,
+                                 n_len_exp in 0u32..3,
+                                 l_len_exp in 0u32..3,
                                  r in any::<Scalar<Public, NonZero>>()) {
             let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-            // w_vec.len() must be power of two
-            let w_vec_len = 2u32.pow(w_vec_len_exp);
-            let lc_vec_len = 2u32.pow(lc_vec_len_exp);
-            let mut w_vec = vec![rand; w_vec_len as usize];
-            let mut l_vec = vec![rand2; lc_vec_len as usize];
+            // n_vec.len() must be power of two
+            let n_len = 2u32.pow(n_len_exp);
+            let l_len = 2u32.pow(l_len_exp);
+            let mut n_vec = vec![rand; n_len as usize];
+            let mut l_vec = vec![rand2; l_len as usize];
 
-            let gens = BaseGens::new(w_vec.len() as u32, l_vec.len() as u32);
-            let c_vec = vec![s!(rand + rand2*rand2).public(); lc_vec_len as usize];
+            let gens = BaseGens::new(n_vec.len() as u32, l_vec.len() as u32);
+            let c_vec = vec![s!(rand + rand2*rand2).public(); l_len as usize];
             let q = s!(r*r).public();
 
-            // w_vec and l_vec must not both be 0
+            // n_vec and l_vec must not both be 0
             if !(rand.is_zero() && rand2.is_zero()) {
-                let proof = NormProof::prove(&mut transcript, gens.clone(), w_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+                let proof = NormProof::prove(&mut transcript, gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
                 let mut transcript = Transcript::new(b"BPP/norm_arg/tests");
-                let v = NormProof::v(&w_vec.to_vec(), &l_vec, &c_vec, q);
-                let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &w_vec.iter(), &l_vec.iter()).normalize();
+                let v = NormProof::v(&n_vec.to_vec(), &l_vec, &c_vec, q);
+                let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
                 assert!(proof.verify(gens, &mut transcript, Cp, &c_vec, r))
             }
         }
