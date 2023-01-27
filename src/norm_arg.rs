@@ -582,13 +582,10 @@ mod tests{
             let c_vec = vec![s!(rand + rand2*rand2).public(); l_len as usize];
             let q = s!(r*r).public();
 
-            // n_vec and l_vec must not both be 0
-            if !(rand.is_zero() && rand2.is_zero()) {
-                let proof = NormProof::prove(&mut ts(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
-                let v = NormProof::v(&n_vec.to_vec(), &l_vec, &c_vec, q);
-                let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-                assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r))
-            }
+            let proof = NormProof::prove(&mut ts(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+            let v = NormProof::v(&n_vec.to_vec(), &l_vec, &c_vec, q);
+            let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+            assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r))
         }
 
         // test that an arbitrary proof doesn't verify
