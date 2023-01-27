@@ -253,17 +253,8 @@ impl NormProof {
 
                 let X = X.normalize();
                 let R = R.normalize();
-                // TODO: secp256kfun already serializes the point at infinity as 33 bytes of 0
-                if X.is_zero() {
-                    transcript.append_message(b"L", &[0u8; 33]);
-                } else {
-                    transcript.append_message(b"L", &X.non_zero().unwrap().to_bytes());
-                }
-                if R.is_zero() {
-                    transcript.append_message(b"R", &[0u8; 33]);
-                } else {
-                    transcript.append_message(b"R", &R.non_zero().unwrap().to_bytes());
-                }
+                transcript.append_message(b"L", &X.to_bytes());
+                transcript.append_message(b"R", &R.to_bytes());
 
                 X_vec.push(X);
                 R_vec.push(R);
@@ -500,6 +491,13 @@ mod tests{
     fn ts() -> Transcript {
         Transcript::new(b"BPP/norm_arg/tests")
     }
+
+    #[test]
+    fn test_secp256kfun_serialization() {
+        let O = Point::<Normal, Public, Zero>::zero();
+        assert_eq!(O.to_bytes(), [0u8; 33]);
+    }
+
 
     #[test]
     fn test_norm_arg() {
