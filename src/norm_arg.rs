@@ -67,7 +67,7 @@ impl BaseGens {
 }
 
 /// A Norm Linear Proof
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct NormProof {
     /// Vector of points X_i that used during norm recursion
     pub x_vec: Vec<Point<Normal, Public, Zero>>,
@@ -411,6 +411,57 @@ impl NormProof {
         let C_0 = g!(v * G + self.n * g_0 + self.l * h_0);
         C_0 == res
     }
+
+    pub fn serialize(&self) -> Vec<u8> {
+        let mut ret = vec![];
+        for (x, r) in self.x_vec.iter().zip(self.r_vec.iter()) {
+            let offset = ret.len();
+            ret.extend(&x.to_bytes());
+            ret[offset] = (ret[offset] & 1) << 1;
+            let tmp = r.to_bytes();
+            ret[offset] |= tmp[0] & 1;
+            ret.extend_from_slice(&tmp[1..33]);
+        }
+        ret.extend(&self.n.to_bytes());
+        ret.extend(&self.l.to_bytes());
+        return ret;
+    }
+
+    pub fn deserialize(buf: &[u8]) -> Option<NormProof> {
+        let len = buf.len();
+        if len < 64
+           || (len - 64) % 65 != 0 {
+            return None;
+        }
+        let n_rounds = (len - 64) / 65;
+        let mut x_vec = vec![];
+        let mut r_vec = vec![];
+        for i in 0..n_rounds {
+            let mut tmp = vec![];
+            let offset = i*65;
+            for j in 0..2 {
+                let sign = (buf[offset] & (2-(j as u8))) >> (1-j);
+                let x = &buf[offset+j*32+1..offset+j*32+33];
+                if x != [0u8;32] {
+                    tmp.push(2 + sign);
+                } else {
+                    tmp.push(0);
+                }
+                tmp.extend(x);
+            }
+            x_vec.push(Point::<_, Public, Zero>::from_slice(&tmp[..33])?);
+            r_vec.push(Point::<_, Public, Zero>::from_slice(&tmp[33..])?);
+        }
+        let n = Scalar::from_slice(&buf[len - 64..len - 32])?;
+        let l = Scalar::from_slice(&buf[len - 32..len])?;
+
+        return Some(NormProof {
+            x_vec : x_vec,
+            r_vec : r_vec,
+            n: n,
+            l: l,
+        });
+    }
 }
 
 pub(crate) fn log(n: usize) -> usize {
@@ -509,6 +560,7 @@ mod tests{
         tester(8,64);
         tester(4,8);
         tester(32,1);
+        tester(64,64);
     }
 
     // n_vec and l_vec (and therefore v) are 0. This is fine
@@ -558,6 +610,27 @@ mod tests{
     }
 
     proptest! {
+        #[test]
+        fn norm_proof_serialize(x_vec in any::<Vec<Point::<Normal, Public, Zero>>>(),
+                                r_diff in any::<Point::<Normal, Public, Zero>>(),
+                                l in any::<Scalar<Public, Zero>>(),
+                                n in any::<Scalar<Public, Zero>>()) {
+
+            let mut r_vec = x_vec.clone();
+            let r_len = r_vec.len();
+            if r_len > 0 {
+                r_vec[r_len - 1] = r_diff;
+            }
+            let proof = NormProof {
+                x_vec: x_vec,
+                r_vec: r_vec,
+                l: l,
+                n: n,
+            };
+            let buf = &proof.serialize();
+            assert_eq!(proof, NormProof::deserialize(buf).unwrap());
+        }
+
         // test that honest proof must verify
         #[test]
         fn norm_arg_completeness(rand in any::<Scalar<Public, Zero>>(),
