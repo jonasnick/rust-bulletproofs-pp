@@ -16,7 +16,7 @@ extern crate merlin;
 /// Base generators used in the norm argument.
 /// Unlike inner product arguments, G and H might not be of the
 /// same length.
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct BaseGens {
     /// The points Vec<G>
     pub G_vec: Vec<Point<NonNormal>>,
@@ -361,7 +361,7 @@ impl NormProof {
     /// where v = <n_vec, n_vec>_(r^2) + <c_vec, l_vec>
     pub fn verify(
         &self,
-        gens: BaseGens,
+        gens: &BaseGens,
         transcript: &mut merlin::Transcript,
         C: Point::<Normal, Public, Zero>,
         c_vec: &[PubScalarZ],
@@ -513,7 +513,7 @@ pub(crate) fn tester(sz_n: u32, sz_l: u32) {
 
     let mut transcript = Transcript::new(b"test");
     assert!(prf.verify(
-        gens,
+        &gens,
         &mut transcript,
         C.normalize(),
         &c,
@@ -523,6 +523,7 @@ pub(crate) fn tester(sz_n: u32, sz_l: u32) {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct VerifyVector {
+    pub gens: BaseGens,
     pub C: Point::<Normal, Public, Zero>,
     pub c_vec: Vec<PubScalarZ>,
     pub r: PubScalarNz,
@@ -552,8 +553,9 @@ impl VerifyVectors {
 
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
+        assert!(proof.verify(&gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
         vecs.push(VerifyVector {
+            gens: gens,
             C: C,
             c_vec: c_vec,
             r: r,
@@ -579,7 +581,7 @@ impl VerifyVectors {
         let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
+        assert!(proof.verify(&gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
 
         let mut invalid_x = [0u8;32];
         invalid_x[31] = 5;
@@ -591,11 +593,12 @@ impl VerifyVectors {
         assert!(NormProof::deserialize(&proof).is_none());
 
         vecs.push(VerifyVector {
+            gens: gens,
             C: C,
             c_vec: c_vec,
             r: r,
             proof: proof,
-            result: true,
+            result: false,
             comment: "".to_string(),
         });
 
@@ -626,10 +629,28 @@ impl VerifyVectors {
         result.push_str(" }");
         result
     }
+
+    fn gens_to_C(G_vec: &Vec<Point<NonNormal>>, H_vec: &Vec<Point<NonNormal>>) -> String {
+        let mut all_gens : Vec<Point<NonNormal>> = vec![];
+        all_gens.extend(G_vec);
+        all_gens.extend(H_vec);
+        let mut result = String::from("{ ");
+        for g in all_gens {
+            for byte in g.normalize().to_bytes() {
+                result.push_str(&format!("0x{:02X}, ", byte));
+            }
+        }
+        result.pop();
+        result.pop();
+        result.push_str(" }");
+        result
+    }
+
     pub fn to_C(&self) -> String {
         let mut s = String::new();
 
         for (i, v) in self.vectors.iter().enumerate() {
+            s.push_str(&format!("static const unsigned char verify_vector_{}_gens[{}] = {};\n", i, (v.gens.G_vec.len() + v.gens.H_vec.len())*33, VerifyVectors::gens_to_C(&v.gens.G_vec, &v.gens.H_vec)));
             s.push_str(&format!("static const unsigned char verify_vector_{}_commit33[33] = {};\n", i, &VerifyVectors::bytearray_to_C(&v.C.to_bytes())));
             s.push_str(&format!("static const unsigned char verify_vector_{}_c_vec32[{}][32] = {};\n", i, v.c_vec.len(), &VerifyVectors::scalars_to_C(&v.c_vec)));
             s.push_str(&format!("static secp256k1_scalar verify_vector_{}_c_vec[{}];\n", i, v.c_vec.len()));
@@ -674,7 +695,7 @@ mod tests{
 
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r));
+        assert!(proof.verify(&gens, &mut ts(), Cp, &c_vec, r));
 
         tester(4,2);
         tester(32,16);
@@ -700,7 +721,7 @@ mod tests{
         assert_eq!(Cp, Point::<Normal, Public, Zero>::zero());
 
         let proof = NormProof::prove(&mut ts(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
-        assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r));
+        assert!(proof.verify(&gens, &mut ts(), Cp, &c_vec, r));
 
     }
 
@@ -718,7 +739,7 @@ mod tests{
         let proof = NormProof::prove(&mut ts(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r));
+        assert!(proof.verify(&gens, &mut ts(), Cp, &c_vec, r));
 
         let l_vec = n_vec;
         let n_vec = vec![rand_scalar()];
@@ -727,7 +748,7 @@ mod tests{
         let proof = NormProof::prove(&mut ts(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r));
+        assert!(proof.verify(&gens, &mut ts(), Cp, &c_vec, r));
     }
 
     #[test]
@@ -778,7 +799,7 @@ mod tests{
             let v = NormProof::v(&n_vec.to_vec(), &l_vec, &c_vec, q);
             let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
             let gens = BaseGens::new(n_vec.len() as u32, l_vec.len() as u32);
-            assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r))
+            assert!(proof.verify(&gens, &mut ts(), Cp, &c_vec, r))
         }
 
         // test that an arbitrary proof doesn't verify
@@ -798,7 +819,7 @@ mod tests{
                 n: n,
                 l: l,
             };
-            assert!(!proof.verify(gens, &mut ts(), Cp, &c_vec[0..len], r));
+            assert!(!proof.verify(&gens, &mut ts(), Cp, &c_vec[0..len], r));
         }
     }
 }
