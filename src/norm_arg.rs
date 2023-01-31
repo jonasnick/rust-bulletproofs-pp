@@ -521,6 +521,127 @@ pub(crate) fn tester(sz_n: u32, sz_l: u32) {
     ))
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub struct VerifyVector {
+    pub C: Point::<Normal, Public, Zero>,
+    pub c_vec: Vec<PubScalarZ>,
+    pub r: PubScalarNz,
+    pub proof: Vec<u8>,
+    pub result: bool,
+    pub comment: String,
+}
+
+
+pub struct VerifyVectors {
+    pub vectors: Vec<VerifyVector>,
+}
+
+impl VerifyVectors {
+    pub fn new() -> Self {
+        let mut vecs = vec![];
+
+        // Vector 1: vector of size 1
+        let gens = BaseGens::new(1, 1);
+        let n_vec = vec![s!(-2).public().mark_zero()];
+        let l_vec = vec![s!(-3).public().mark_zero()];
+        let c_vec = vec![s!(-5).public().mark_zero()];
+        let r = s!(-7).public();
+        let q = s!(r*r).public();
+
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
+        let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+        assert!(proof.verify(gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
+        vecs.push(VerifyVector {
+            C: C,
+            c_vec: c_vec,
+            r: r,
+            proof: proof.serialize(),
+            result: true,
+            comment: "".to_string(),
+        });
+
+        // Vector 2: wrong proof size
+        vecs.push(vecs[0].clone());
+        vecs[1].proof = vecs[0].proof[..vecs[0].proof.len()-1].to_vec();
+        vecs[1].result = false;
+        assert!(NormProof::deserialize(&vecs[1].proof).is_none());
+
+        // Vector 3: invalid point in proof
+        let gens = BaseGens::new(2, 1);
+        let n_vec = vec![s!(-2).public().mark_zero(), s!(-7).public().mark_zero()];
+        let l_vec = vec![s!(-3).public().mark_zero()];
+        let c_vec = vec![s!(-5).public().mark_zero()];
+        let r = s!(-11).public();
+        let q = s!(r*r).public();
+
+        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
+        let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+        assert!(proof.verify(gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
+
+        let mut invalid_x = [0u8;32];
+        invalid_x[31] = 5;
+        let proof = proof.serialize();
+        let mut new_proof = proof[0..1].to_vec();
+        new_proof.extend(invalid_x);
+        new_proof.extend_from_slice(&proof[33..]);
+        let proof = new_proof;
+        assert!(NormProof::deserialize(&proof).is_none());
+
+        vecs.push(VerifyVector {
+            C: C,
+            c_vec: c_vec,
+            r: r,
+            proof: proof,
+            result: true,
+            comment: "".to_string(),
+        });
+
+        return VerifyVectors { vectors: vecs };
+    }
+
+    // Given an array of bytes outputs a string with each element of the array
+    // in hex. Example output: "{ 0x0F, 0xAB, 0x12 }"
+    fn bytearray_to_C(array: &[u8]) -> String {
+        let mut result = String::from("{ ");
+        for byte in array {
+            result.push_str(&format!("0x{:02X}, ", byte));
+        }
+        result.pop();
+        result.pop();
+        result.push_str(" }");
+        result
+    }
+
+    fn scalars_to_C(scalars: &Vec<PubScalarZ>) -> String {
+        let mut result = String::from("{ ");
+        for s in scalars {
+            result.push_str(&VerifyVectors::bytearray_to_C(&s.to_bytes()));
+            result.push_str(", ");
+        }
+        result.pop();
+        result.pop();
+        result.push_str(" }");
+        result
+    }
+    pub fn to_C(&self) -> String {
+        let mut s = String::new();
+
+        for (i, v) in self.vectors.iter().enumerate() {
+            s.push_str(&format!("static const unsigned char verify_vector_{}_commit33[33] = {};\n", i, &VerifyVectors::bytearray_to_C(&v.C.to_bytes())));
+            s.push_str(&format!("static const unsigned char verify_vector_{}_c_vec32[{}][32] = {};\n", i, v.c_vec.len(), &VerifyVectors::scalars_to_C(&v.c_vec)));
+            s.push_str(&format!("static secp256k1_scalar verify_vector_{}_c_vec[{}];\n", i, v.c_vec.len()));
+            s.push_str(&format!("static const unsigned char verify_vector_{}_r32[32] = {};\n", i, &VerifyVectors::bytearray_to_C(&v.r.to_bytes())));
+            s.push_str(&format!("static const unsigned char verify_vector_{}_proof[] = {};\n", i, &VerifyVectors::bytearray_to_C(&v.proof)));
+            s.push_str(&format!("static const int verify_vector_{}_result = {};\n", i, &(v.result as u8)));
+        }
+
+        return s;
+    }
+}
+
 #[cfg(test)]
 mod tests{
     use super::*;
@@ -607,6 +728,11 @@ mod tests{
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let Cp = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         assert!(proof.verify(gens, &mut ts(), Cp, &c_vec, r));
+    }
+
+    #[test]
+    fn test_vectors() {
+        VerifyVectors::new();
     }
 
     proptest! {

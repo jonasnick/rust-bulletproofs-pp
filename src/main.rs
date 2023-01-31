@@ -5,7 +5,8 @@ mod rangeproof;
 
 pub use rangeproof::{Proof, Prover, Verifier, commit};
 use norm_arg::log;
+use norm_arg::VerifyVectors;
 
 fn main() {
-    norm_arg::tester(64, 64);
+    println!("{}", VerifyVectors::new().to_C());
 }
