@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
 
 /// Rangeproof implementation using norm argument
+use crate::transcript::Transcript;
 use crate::norm_arg::{self, NormProof};
-use merlin::Transcript;
 use norm_arg::BaseGens;
 use rand::{CryptoRng, RngCore};
 use secp256kfun::{Point, Scalar, g, G, s, marker::{Secret, Zero, Public, NonNormal, NonZero, Secrecy, ZeroChoice}};
@@ -559,19 +559,19 @@ impl<'a> Verifier<'a> {
 }
 
 
-fn r1_challenge_e(t: &mut merlin::Transcript, r1_comm: &Round1Commitments, n: u64, b: u64, V: &Point) -> Scalar<Public> {
-    t.append_message(b"protocol", b"Bulletproofs++");
-    t.append_message(b"V", &V.to_bytes());
-    t.append_u64(b"n", n);
-    t.append_u64(b"b", b);
-    t.append_message(b"D", &r1_comm.D.normalize().to_bytes());
-    t.append_message(b"M", &r1_comm.M.normalize().to_bytes());
+fn r1_challenge_e(t: &mut Transcript, r1_comm: &Round1Commitments, n: u64, b: u64, V: &Point) -> Scalar<Public> {
+    t.append_message(b"Bulletproofs++");
+    t.append_message(&V.to_bytes());
+    t.append_message(&n.to_le_bytes());
+    t.append_message(&b.to_le_bytes());
+    t.append_message(&r1_comm.D.normalize().to_bytes());
+    t.append_message(&r1_comm.M.normalize().to_bytes());
     merlin_scalar(t, b"e")
     // Scalar::one().public()
 }
 
-fn r2_challenges(t: &mut merlin::Transcript, r2_comm: &Round2Commitments) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
-    t.append_message(b"R", &r2_comm.R.normalize().to_bytes());
+fn r2_challenges(t: &mut Transcript, r2_comm: &Round2Commitments) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
+    t.append_message(&r2_comm.R.normalize().to_bytes());
     let x = merlin_scalar(t, b"x");
     let y = merlin_scalar(t, b"y");
     let r = merlin_scalar(t, b"r");
@@ -581,8 +581,8 @@ fn r2_challenges(t: &mut merlin::Transcript, r2_comm: &Round2Commitments) -> (Sc
     // (Scalar::one().public(), Scalar::one().public(), Scalar::one().public())
 }
 
-fn r3_challenge(t: &mut merlin::Transcript, r3_comm: &Round3Commitments) -> Scalar<Public> {
-    t.append_message(b"S", &r3_comm.S.normalize().to_bytes());
+fn r3_challenge(t: &mut Transcript, r3_comm: &Round3Commitments) -> Scalar<Public> {
+    t.append_message(&r3_comm.S.normalize().to_bytes());
     merlin_scalar(t, b"t")
     // Scalar::from(3u32).public().non_zero().unwrap()
     // Scalar::from(1).public().non_zero().unwrap()
@@ -601,9 +601,8 @@ fn bp_pp_comm<R: CryptoRng + RngCore>(rng: &mut R, gens: &BaseGens, w: &[Scalar<
     (b_r, res.non_zero().unwrap())
 }
 
-fn merlin_scalar(t: &mut merlin::Transcript, label: &'static [u8]) -> Scalar<Public> {
-    let mut bytes = [0u8; 32];
-    t.challenge_bytes(label, &mut bytes);
+fn merlin_scalar(t: &mut Transcript, label: &'static [u8]) -> Scalar<Public> {
+    let mut bytes = t.challenge_bytes();
     Scalar::from_bytes(bytes).unwrap().non_zero().unwrap()
 }
 

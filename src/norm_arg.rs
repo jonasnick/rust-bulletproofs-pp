@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 
-use merlin::Transcript;
+use crate::transcript::Transcript;
 use rand::thread_rng;
 use secp256kfun::{g, hash::Tag, s, Point, G};
 extern crate sha2;
@@ -10,8 +10,6 @@ use secp256kfun::{marker::*, Scalar};
 
 pub type PubScalarZ = Scalar<Public, Zero>;
 pub type PubScalarNz = Scalar<Public, NonZero>;
-
-extern crate merlin;
 
 /// Base generators used in the norm argument.
 /// Unlike inner product arguments, G and H might not be of the
@@ -148,9 +146,8 @@ where
 }
 
 // Compute a scalar challenge from a transcript.
-fn scalar_challenge(t: &mut merlin::Transcript) -> PubScalarNz {
-    let mut dest = [0u8; 32];
-    t.challenge_bytes(b"e", &mut dest);
+fn scalar_challenge(t: &mut Transcript) -> PubScalarNz {
+    let mut dest = t.challenge_bytes();
     let e = Scalar::from_bytes(dest).unwrap().non_zero().unwrap();
     e
 }
@@ -173,7 +170,7 @@ impl NormProof {
 
     /// Prove that <n_vec, n_vec>^2_(r^2) + <l, c> = v
     pub fn prove(
-        transcript: &mut merlin::Transcript,
+        transcript: &mut Transcript,
         mut gens: BaseGens,
         mut n_vec: Vec<Scalar<Public, Zero>>,
         mut l_vec: Vec<Scalar<Public, Zero>>,
@@ -253,8 +250,8 @@ impl NormProof {
 
                 let X = X.normalize();
                 let R = R.normalize();
-                transcript.append_message(b"L", &X.to_bytes());
-                transcript.append_message(b"R", &R.to_bytes());
+                transcript.append_message(&X.to_bytes());
+                transcript.append_message(&R.to_bytes());
 
                 X_vec.push(X);
                 R_vec.push(R);
@@ -325,15 +322,15 @@ impl NormProof {
     // Get the scalars to be used in verification in multi scalar exponentiation.
     fn verification_scalars(
         &self,
-        t: &mut merlin::Transcript,
+        t: &mut Transcript,
         r: PubScalarNz,
         g_n: usize,
         h_n: usize,
     ) -> (Vec<PubScalarNz>, Vec<PubScalarZ>, Vec<PubScalarZ>) {
         let mut challenges = Vec::with_capacity(self.x_vec.len());
         for (X, R) in self.x_vec.iter().zip(self.r_vec.iter()) {
-            t.append_message(b"L", &X.to_bytes());
-            t.append_message(b"R", &R.to_bytes());
+            t.append_message(&X.to_bytes());
+            t.append_message(&R.to_bytes());
             challenges.push(scalar_challenge(t));
         }
 
@@ -362,7 +359,7 @@ impl NormProof {
     pub fn verify(
         &self,
         gens: &BaseGens,
-        transcript: &mut merlin::Transcript,
+        transcript: &mut Transcript,
         C: Point::<Normal, Public, Zero>,
         c_vec: &[PubScalarZ],
         r: PubScalarNz,
