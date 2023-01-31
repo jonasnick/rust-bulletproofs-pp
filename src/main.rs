@@ -1,5 +1,6 @@
 //! Implementation of Bulletproofs++ in rust
 
+mod transcript;
 mod norm_arg;
 mod rangeproof;
 
