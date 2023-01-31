@@ -250,8 +250,7 @@ impl NormProof {
 
                 let X = X.normalize();
                 let R = R.normalize();
-                transcript.append_message(&X.to_bytes());
-                transcript.append_message(&R.to_bytes());
+                transcript.append_message(&Self::serialize_two_points(&X, &R));
 
                 X_vec.push(X);
                 R_vec.push(R);
@@ -329,8 +328,7 @@ impl NormProof {
     ) -> (Vec<PubScalarNz>, Vec<PubScalarZ>, Vec<PubScalarZ>) {
         let mut challenges = Vec::with_capacity(self.x_vec.len());
         for (X, R) in self.x_vec.iter().zip(self.r_vec.iter()) {
-            t.append_message(&X.to_bytes());
-            t.append_message(&R.to_bytes());
+            t.append_message(&Self::serialize_two_points(&X, &R));
             challenges.push(scalar_challenge(t));
         }
 
@@ -409,15 +407,19 @@ impl NormProof {
         C_0 == res
     }
 
+    fn serialize_two_points(x: &Point<Normal, Public, Zero>, r: &Point<Normal, Public, Zero>) -> Vec<u8> {
+        let mut ret = x.to_bytes().to_vec();
+        ret[0] = (ret[0] & 1) << 1;
+        let tmp = r.to_bytes();
+        ret[0] |= tmp[0] & 1;
+        ret.extend_from_slice(&tmp[1..33]);
+        ret
+    }
+
     pub fn serialize(&self) -> Vec<u8> {
         let mut ret = vec![];
         for (x, r) in self.x_vec.iter().zip(self.r_vec.iter()) {
-            let offset = ret.len();
-            ret.extend(&x.to_bytes());
-            ret[offset] = (ret[offset] & 1) << 1;
-            let tmp = r.to_bytes();
-            ret[offset] |= tmp[0] & 1;
-            ret.extend_from_slice(&tmp[1..33]);
+            ret.extend(&Self::serialize_two_points(x, r));
         }
         ret.extend(&self.n.to_bytes());
         ret.extend(&self.l.to_bytes());
@@ -546,11 +548,11 @@ impl VerifyVectors {
         let r = s!(-7).public();
         let q = s!(r*r).public();
 
-        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let proof = NormProof::prove(&mut Transcript::new_untagged(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
 
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(&gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
+        assert!(proof.verify(&gens, &mut Transcript::new_untagged(), C, &c_vec, r));
         vecs.push(VerifyVector {
             gens: gens,
             C: C,
@@ -575,10 +577,10 @@ impl VerifyVectors {
         let r = s!(-11).public();
         let q = s!(r*r).public();
 
-        let proof = NormProof::prove(&mut Transcript::new(b"BPP/norm_arg/tests"), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+        let proof = NormProof::prove(&mut Transcript::new_untagged(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(&gens, &mut Transcript::new(b"BPP/norm_arg/tests"), C, &c_vec, r));
+        assert!(proof.verify(&gens, &mut Transcript::new_untagged(), C, &c_vec, r));
 
         let mut invalid_x = [0u8;32];
         invalid_x[31] = 5;
@@ -596,6 +598,29 @@ impl VerifyVectors {
             r: r,
             proof: proof,
             result: false,
+            comment: "".to_string(),
+        });
+
+        // Vector 4: |n| = 2, |c| = 4
+        let n_vec = vec![s!(-2).public().mark_zero(), s!(1).public().mark_zero()];
+        let l_vec = vec![s!(-3).public().mark_zero(), s!(2).public().mark_zero(), s!(-13).public().mark_zero(), s!(11).public().mark_zero()];
+        let c_vec = vec![s!(-5).public().mark_zero(), s!(3).public().mark_zero(), s!(-17).public().mark_zero(), s!(13).public().mark_zero()];
+        let gens = BaseGens::new(n_vec.len() as u32, c_vec.len() as u32);
+        let r = s!(-7).public();
+        let q = s!(r*r).public();
+
+        let proof = NormProof::prove(&mut Transcript::new_untagged(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
+        let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+        assert!(proof.verify(&gens, &mut Transcript::new_untagged(), C, &c_vec, r));
+        vecs.push(VerifyVector {
+            gens: gens,
+            C: C,
+            c_vec: c_vec,
+            r: r,
+            proof: proof.serialize(),
+            result: true,
             comment: "".to_string(),
         });
 

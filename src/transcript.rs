@@ -14,6 +14,12 @@ impl Transcript {
             hasher: hasher
         }
     }
+    pub fn new_untagged() -> Transcript {
+        let hasher = Sha256::default();
+        Transcript {
+            hasher: hasher
+        }
+    }
     pub fn append_message(&mut self, message: &[u8]) {
         self.hasher.update(message);
     }
