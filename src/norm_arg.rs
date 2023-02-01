@@ -147,7 +147,7 @@ where
 
 // Compute a scalar challenge from a transcript.
 fn scalar_challenge(t: &mut Transcript) -> PubScalarNz {
-    let mut dest = t.challenge_bytes();
+    let dest = t.challenge_bytes();
     let e = Scalar::from_bytes(dest).unwrap().non_zero().unwrap();
     e
 }
@@ -540,7 +540,7 @@ impl VerifyVectors {
     pub fn new() -> Self {
         let mut vecs = vec![];
 
-        // Vector 1: vector of size 1
+        // VECTOR: vector of size 1
         let gens = BaseGens::new(1, 1);
         let n_vec = vec![s!(-2).public().mark_zero()];
         let l_vec = vec![s!(-3).public().mark_zero()];
@@ -552,8 +552,7 @@ impl VerifyVectors {
 
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(&gens, &mut Transcript::new_untagged(), C, &c_vec, r));
-        vecs.push(VerifyVector {
+        let vec = VerifyVector {
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -561,15 +560,46 @@ impl VerifyVectors {
             proof: proof.serialize(),
             result: true,
             comment: "".to_string(),
-        });
+        };
+        assert_eq!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r), vec.result);
+        vecs.push(vec);
 
-        // Vector 2: wrong proof size
-        vecs.push(vecs[0].clone());
-        vecs[1].proof = vecs[0].proof[..vecs[0].proof.len()-1].to_vec();
-        vecs[1].result = false;
-        assert!(NormProof::deserialize(&vecs[1].proof).is_none());
+        // VECTOR: wrong commitment
+        let mut vec = vecs[0].clone();
+        assert!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r));
+        let C2 = bp_comm(s!(-v), &vec.gens.G_vec.iter(), &vec.gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+        vec.C = C2;
+        vec.result = false;
+        assert_eq!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r), vec.result);
+        vecs.push(vec);
 
-        // Vector 3: invalid point in proof
+        // VECTOR: l is overflowing
+        let mut vec = vecs[0].clone();
+        let mut overflowing_scalar = s!(-1).to_bytes();
+        overflowing_scalar[31] = overflowing_scalar[31] + 1;
+        vec.proof = vec.proof[..vec.proof.len()-32].to_vec();
+        vec.proof.extend(overflowing_scalar);
+        vec.result = false;
+        assert_eq!(NormProof::deserialize(&vec.proof).is_some(), vec.result);
+        vecs.push(vec);
+
+        // VECTOR: n is overflowing
+        let mut vec = vecs[0].clone();
+        vec.proof = vec.proof[..vec.proof.len()-64].to_vec();
+        vec.proof.extend(overflowing_scalar);
+        vec.proof.extend(vec.proof[vec.proof.len()-32..].to_vec());
+        vec.result = false;
+        assert_eq!(NormProof::deserialize(&vec.proof).is_some(), vec.result);
+        vecs.push(vec);
+
+        // VECTOR: wrong proof size
+        let mut vec = vecs[0].clone();
+        vec.proof = vec.proof[..vec.proof.len()-1].to_vec();
+        vec.result = false;
+        assert_eq!(NormProof::deserialize(&vec.proof).is_some(), vec.result);
+        vecs.push(vec);
+
+        // VECTOR: invalid point in proof
         let gens = BaseGens::new(2, 1);
         let n_vec = vec![s!(-2).public().mark_zero(), s!(-7).public().mark_zero()];
         let l_vec = vec![s!(-3).public().mark_zero()];
@@ -589,9 +619,7 @@ impl VerifyVectors {
         new_proof.extend(invalid_x);
         new_proof.extend_from_slice(&proof[33..]);
         let proof = new_proof;
-        assert!(NormProof::deserialize(&proof).is_none());
-
-        vecs.push(VerifyVector {
+        let vec = VerifyVector {
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -599,9 +627,11 @@ impl VerifyVectors {
             proof: proof,
             result: false,
             comment: "".to_string(),
-        });
+        };
+        assert_eq!(NormProof::deserialize(&vec.proof).is_some(), vec.result);
+        vecs.push(vec);
 
-        // Vector 4: |n| = 2, |c| = 4
+        // VECTOR: |n| = 2, |c| = 4
         let n_vec = vec![s!(-2).public().mark_zero(), s!(1).public().mark_zero()];
         let l_vec = vec![s!(-3).public().mark_zero(), s!(2).public().mark_zero(), s!(-13).public().mark_zero(), s!(11).public().mark_zero()];
         let c_vec = vec![s!(-5).public().mark_zero(), s!(3).public().mark_zero(), s!(-17).public().mark_zero(), s!(13).public().mark_zero()];
@@ -613,8 +643,7 @@ impl VerifyVectors {
 
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
-        assert!(proof.verify(&gens, &mut Transcript::new_untagged(), C, &c_vec, r));
-        vecs.push(VerifyVector {
+        let vec = VerifyVector {
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -622,7 +651,42 @@ impl VerifyVectors {
             proof: proof.serialize(),
             result: true,
             comment: "".to_string(),
-        });
+        };
+        assert_eq!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r), vec.result);
+        vecs.push(vec);
+
+        // VECTOR: |n| = 4, |c| = 1
+        let n_vec: Vec<Scalar<Public, Zero>> = vec![s!(-2), s!(1), s!(-13), s!(11)].into_iter().map(|x| x.public().mark_zero()).collect();
+        let l_vec = vec![s!(-3).public().mark_zero()];
+        let c_vec = vec![s!(-5).public().mark_zero()];
+        let gens = BaseGens::new(n_vec.len() as u32, c_vec.len() as u32);
+        let r = s!(-13).public();
+        let q = s!(r*r).public();
+
+        let proof = NormProof::prove(&mut Transcript::new_untagged(), gens.clone(), n_vec.clone(), l_vec.clone(), c_vec.clone(), r);
+
+        let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
+        let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+        let vec = VerifyVector {
+            gens: gens,
+            C: C,
+            c_vec: c_vec,
+            r: r,
+            proof: proof.serialize(),
+            result: true,
+            comment: "".to_string(),
+        };
+        assert_eq!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r), vec.result);
+        vecs.push(vec);
+
+        // VECTOR: wrong commitment
+        let mut vec = vecs[vecs.len()-1].clone();
+        assert!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r));
+        let C2 = bp_comm(s!(-v), &vec.gens.G_vec.iter(), &vec.gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
+        vec.C = C2;
+        vec.result = false;
+        assert_eq!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r), vec.result);
+        vecs.push(vec);
 
         return VerifyVectors { vectors: vecs };
     }
