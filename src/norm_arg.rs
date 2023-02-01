@@ -526,6 +526,7 @@ pub struct VerifyVector {
     pub gens: BaseGens,
     pub C: Point::<Normal, Public, Zero>,
     pub c_vec: Vec<PubScalarZ>,
+    pub n_vec_len: usize,
     pub r: PubScalarNz,
     pub proof: Vec<u8>,
     pub result: bool,
@@ -534,6 +535,7 @@ pub struct VerifyVector {
 
 
 pub struct VerifyVectors {
+    pub gens: BaseGens,
     pub vectors: Vec<VerifyVector>,
 }
 
@@ -554,6 +556,7 @@ impl VerifyVectors {
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         let vec = VerifyVector {
+            n_vec_len: gens.G_vec.len(),
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -621,6 +624,7 @@ impl VerifyVectors {
         new_proof.extend_from_slice(&proof[33..]);
         let proof = new_proof;
         let vec = VerifyVector {
+            n_vec_len: gens.G_vec.len(),
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -645,6 +649,7 @@ impl VerifyVectors {
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         let vec = VerifyVector {
+            n_vec_len: gens.G_vec.len(),
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -669,6 +674,7 @@ impl VerifyVectors {
         let v = NormProof::v(&n_vec, &l_vec, &c_vec, q);
         let C = bp_comm(v, &gens.G_vec.iter(), &gens.H_vec.iter(), &n_vec.iter(), &l_vec.iter()).normalize();
         let vec = VerifyVector {
+            n_vec_len: gens.G_vec.len(),
             gens: gens,
             C: C,
             c_vec: c_vec,
@@ -689,7 +695,7 @@ impl VerifyVectors {
         assert_eq!(proof.verify(&vec.gens, &mut Transcript::new_untagged(), vec.C, &vec.c_vec, vec.r), vec.result);
         vecs.push(vec);
 
-        return VerifyVectors { vectors: vecs };
+        return VerifyVectors { gens: BaseGens::new(4, 4), vectors: vecs };
     }
 
     // Given an array of bytes outputs a string with each element of the array
@@ -736,9 +742,10 @@ impl VerifyVectors {
     pub fn to_C(&self) -> String {
         let mut s = String::new();
 
+        s.push_str(&format!("static const unsigned char verify_vector_gens[{}] = {};\n", (self.gens.G_vec.len() + self.gens.H_vec.len())*33, VerifyVectors::gens_to_C(&self.gens.G_vec, &self.gens.H_vec)));
         for (i, v) in self.vectors.iter().enumerate() {
-            s.push_str(&format!("static const unsigned char verify_vector_{}_gens[{}] = {};\n", i, (v.gens.G_vec.len() + v.gens.H_vec.len())*33, VerifyVectors::gens_to_C(&v.gens.G_vec, &v.gens.H_vec)));
             s.push_str(&format!("static const unsigned char verify_vector_{}_commit33[33] = {};\n", i, &VerifyVectors::bytearray_to_C(&v.C.to_bytes())));
+            s.push_str(&format!("static const size_t verify_vector_{}_n_vec_len = {};\n", i, v.n_vec_len));
             s.push_str(&format!("static const unsigned char verify_vector_{}_c_vec32[{}][32] = {};\n", i, v.c_vec.len(), &VerifyVectors::scalars_to_C(&v.c_vec)));
             s.push_str(&format!("static secp256k1_scalar verify_vector_{}_c_vec[{}];\n", i, v.c_vec.len()));
             s.push_str(&format!("static const unsigned char verify_vector_{}_r32[32] = {};\n", i, &VerifyVectors::bytearray_to_C(&v.r.to_bytes())));
