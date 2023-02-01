@@ -55,8 +55,9 @@ impl BaseGens {
             gs
         }
 
-        let gs = gen_tagged_points(num_g, "BulletProofs/G");
-        let hs = gen_tagged_points(num_h, "BulletProofs/H");
+        let gens = gen_tagged_points(num_g + num_h, "BulletProofs/gens");
+        let gs = gens[..num_g as usize].to_vec();
+        let hs = gens[num_g as usize ..].to_vec();
         Self {
             G_vec: gs,
             H_vec: hs,
