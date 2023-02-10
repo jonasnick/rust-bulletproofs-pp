@@ -1,5 +1,7 @@
 #![allow(non_snake_case)]
 
+use core::num;
+
 /// Rangeproof implementation using norm argument
 use crate::transcript::Transcript;
 use crate::norm_arg::{self, NormProof};
@@ -73,12 +75,12 @@ pub struct Prover<'a>{
     /// `n` number of bits in the value to be proven(32, 64, 128) in base 2
     num_bits: u64,
     /// The commitment to the value
-    V: &'a Point,
+    V: Vec<Point>,
     /// The value to prove
-    v: u64,
+    v: Vec<u64>,
     /// The blinding factor. In bulletproofs++, this is actually a vector of 8 values
     /// but as a convention, we set the remaining 7 values to 0.
-    gamma: Scalar<Secret, Zero>,
+    gamma: Vec<Scalar<Secret, Zero>>,
     /// Round 1 commitments
     r1_comm: Option<Round1Commitments>,
     /// Round 1 secrets
@@ -102,7 +104,7 @@ pub struct Verifier<'a>{
     /// `n` number of bits in the value to be proven(32, 64, 128)
     num_bits: u64,
     /// The commitment to the value
-    V: &'a Point,
+    V: Vec<Point>,
 }
 
 #[derive(Debug, Clone)]
@@ -132,7 +134,12 @@ pub fn commit(gens: &BaseGens, v: u64, gamma: &Scalar<Secret, Zero>) -> Point<No
 
 impl<'a> Prover<'a> {
 
-    pub fn new(gens: &'a BaseGens, base: u64, num_bits: u64, V: &'a Point, v: u64, gamma: Scalar<Secret, Zero>) -> Self {
+    /// Number of proofs to aggregate
+    pub fn num_proofs(&self) -> usize {
+        self.V.len()
+    }
+
+    pub fn new(gens: &'a BaseGens, base: u64, num_bits: u64, V: Vec<Point>, v: Vec<u64>, gamma: Vec<Scalar<Secret, Zero>>) -> Self {
         assert!(base.is_power_of_two());
         assert!(num_bits.is_power_of_two());
         assert!(num_bits >= crate::log(base as usize) as u64);
@@ -141,24 +148,33 @@ impl<'a> Prover<'a> {
     }
 
     /// Obtain the number of digits in the base representation
-    fn num_digits(&self) -> usize {
+    /// Num of digits in single proof times the number of proofs
+    fn total_num_digits(&self) -> usize {
+        self.num_digits_per_proof() * self.num_proofs()
+    }
+
+    /// Obtain the number of digits in the base representation
+    fn num_digits_per_proof(&self) -> usize {
         self.num_bits as usize/ crate::log(self.base as usize)
     }
 
     /// Proving in base n
     fn prove_round_1<R: CryptoRng + RngCore>(&mut self, rng: &mut R) {
-
         let num_base_bits = crate::log(self.base as usize);
-        let num_digits = (self.num_bits as usize) / num_base_bits;
-        let mut v1 = self.v;
+        let num_digits_per_proof = self.num_digits_per_proof();
+        let total_num_digits = self.total_num_digits();
 
-        let mut d = Vec::with_capacity(num_digits);
-        println!("num_digits: {}", num_digits);
-        for _ in 0..num_digits {
-            d.push(v1 % self.base);
-            v1 = v1 >> num_base_bits;
+        let mut d = Vec::with_capacity(total_num_digits);
+        println!("total num_digits: {}", total_num_digits);
+        for v in self.v.iter() {
+            let mut v1 = *v;
+            for _ in 0..num_digits_per_proof {
+                d.push(v1 % self.base);
+                v1 = v1 >> num_base_bits;
+            }
         }
 
+        // Shared multiplicity mode for now.
         let mut m = vec![0; self.base as usize];
         for dig in d.iter() {
             m[*dig as usize] += 1u64;
@@ -189,7 +205,7 @@ impl<'a> Prover<'a> {
         self.r2_comm = Some(Round2Commitments { R });
     }
 
-    fn prove_round_3<R: CryptoRng + RngCore>(&mut self, rng: &mut R, x: Scalar<Public>, y: Scalar<Public>, q: Scalar<Public>, e: Scalar<Public>) {
+    fn prove_round_3<R: CryptoRng + RngCore>(&mut self, rng: &mut R, x: Scalar<Public>, y: Scalar<Public>, q: Scalar<Public>, e: Scalar<Public>, lambda: Scalar<Public>) {
         let d = self.r1_sec.as_ref().unwrap().d.clone();
         let m = self.r1_sec.as_ref().unwrap().m.clone();
         let r = self.r2_sec.as_ref().unwrap().r.clone();
@@ -198,8 +214,8 @@ impl<'a> Prover<'a> {
         let l_r = self.r2_sec.as_ref().unwrap().l_r.clone();
         let q_inv_pows = q_inv_pows(q, self.gens.G_vec.len());
 
-        let alpha_r = alpha_r_q_inv_pow(self.num_digits(), x, e, &q_inv_pows);
-        let alpha_d = alpha_d_q_inv_pow(self.base, self.num_digits(), &q_inv_pows);
+        let alpha_r = alpha_r_q_inv_pow(self.total_num_digits(), x, e, &q_inv_pows);
+        let alpha_d = alpha_d_q_inv_pow(self.base, self.num_digits_per_proof(), self.num_proofs(), &q_inv_pows, lambda);
         let alpha_m = alpha_m_q_inv_pows(e, x, self.base as usize, &q_inv_pows);
         let alpha_m = alpha_m.into_iter().map(|x| x.secret()).collect::<Vec<_>>();
 
@@ -218,9 +234,14 @@ impl<'a> Prover<'a> {
         let y_inv = y.invert();
         let y = y.mark_zero();
         let c = c_poly(y);
-        let two_gamma = s!(2*self.gamma);
+        let mut gamma_delta = Scalar::zero();
+        let mut lambda_pow_i = s!(1).public();
+        for gamma in self.gamma.iter() {
+            gamma_delta = s!(gamma_delta + 2*gamma*lambda_pow_i);
+            lambda_pow_i = s!(lambda_pow_i * lambda).public();
+        }
         let mut l_vec = Poly {
-            coeffs: vec![Vec::new(), l_m, l_d, l_r, Vec::new(), vec![two_gamma], Vec::new(), Vec::new()],
+            coeffs: vec![Vec::new(), l_m, l_d, l_r, Vec::new(), vec![gamma_delta], Vec::new(), Vec::new()],
         };
         let l_vec_w_q = l_vec.mul_c(&c);
         dbg!(&l_vec_w_q);
@@ -297,10 +318,10 @@ impl<'a> Prover<'a> {
     }
 
     fn r1_challenge_e(&self, t: &mut Transcript) -> Scalar<Public> {
-        r1_challenge_e(t, self.r1_comm.as_ref().unwrap(), self.num_bits, self.base, self.V)
+        r1_challenge_e(t, self.r1_comm.as_ref().unwrap(), self.num_bits, self.base, &self.V)
     }
 
-    fn r2_challenges(&self, t: &mut Transcript) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
+    fn r2_challenges(&self, t: &mut Transcript) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
         r2_challenges(t, self.r2_comm.as_ref().unwrap())
     }
 
@@ -355,7 +376,7 @@ impl<'a> Prover<'a> {
 
         // Round 2
         self.prove_round_2(rng, e);
-        let (x, y, r, q) = self.r2_challenges(transcript);
+        let (x, y, r, q, lambda) = self.r2_challenges(transcript);
         dbg!(&self.r2_sec);
         {
             let temp = &self.r2_sec.as_ref().unwrap().r[0];
@@ -363,7 +384,7 @@ impl<'a> Prover<'a> {
         }
 
         // Round 3
-        self.prove_round_3(rng, x, y, q, e);
+        self.prove_round_3(rng, x, y, q, e, lambda);
         let t = self.r3_challenge(transcript);
         dbg!(&self.r3_sec);
 
@@ -401,7 +422,7 @@ impl<'a> Prover<'a> {
 
 impl<'a> Verifier<'a> {
 
-    pub fn new(gens: &'a BaseGens, base: u64, num_bits: u64, V: &'a Point) -> Self {
+    pub fn new(gens: &'a BaseGens, base: u64, num_bits: u64, V: Vec<Point>) -> Self {
         assert!(base.is_power_of_two());
         assert!(num_bits.is_power_of_two());
         assert!(num_bits >= crate::log(base as usize) as u64);
@@ -410,15 +431,23 @@ impl<'a> Verifier<'a> {
     }
 
     /// Obtain the number of digits
-    fn num_digits(&self) -> usize {
+    fn num_digits_per_proof(&self) -> usize {
         (self.num_bits / crate::log(self.base as usize) as u64) as usize
     }
 
-    fn r1_challenge_e(&self, t: &mut Transcript, prf: &Proof) -> Scalar<Public> {
-        r1_challenge_e(t, &prf.r1_comm, self.num_bits, self.base, self.V)
+    fn num_proofs(&self) -> usize {
+        self.V.len()
     }
 
-    fn r2_challenges(&self, t: &mut Transcript, prf: &Proof) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
+    fn total_num_digits(&self) -> usize {
+        self.num_digits_per_proof() * self.num_proofs()
+    }
+
+    fn r1_challenge_e(&self, t: &mut Transcript, prf: &Proof) -> Scalar<Public> {
+        r1_challenge_e(t, &prf.r1_comm, self.num_bits, self.base, &self.V)
+    }
+
+    fn r2_challenges(&self, t: &mut Transcript, prf: &Proof) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
         r2_challenges(t, &prf.r2_comm)
     }
 
@@ -427,11 +456,13 @@ impl<'a> Verifier<'a> {
     }
 
     // The public values to be added to w
-    fn g_vec_pub_offsets(&self, e: Scalar<Public>, x: Scalar<Public>, q: Scalar<Public>, t: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
+    fn g_vec_pub_offsets(&self, e: Scalar<Public>, x: Scalar<Public>, q: Scalar<Public>, t: Scalar<Public>, lambda: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
         let t_pows = t_pows(t, self.gens.H_vec.len());
         let q_inv_pows = q_inv_pows(q, self.gens.G_vec.len());
-        let alpha_d = alpha_d_q_inv_pow(self.base, self.num_digits(), &q_inv_pows);
-        let alpha_r = alpha_r_q_inv_pow(self.num_digits(), x, e, &q_inv_pows);
+        let num_digits = self.num_digits_per_proof();
+        let num_proofs = self.num_proofs();
+        let alpha_d = alpha_d_q_inv_pow(self.base, num_digits, num_proofs, &q_inv_pows, lambda);
+        let alpha_r = alpha_r_q_inv_pow(self.total_num_digits(), x, e, &q_inv_pows);
         let alpha_m = alpha_m_q_inv_pows(e, x, self.base as usize, &q_inv_pows);
 
         let alpha_d_t_3 = scalar_mul_vec(&alpha_d, t_pows[3]);
@@ -442,23 +473,23 @@ impl<'a> Verifier<'a> {
         dbg!(add_vecs(&res, &alpha_m_t_4))
     }
 
-    fn g_offset(&self, e: Scalar<Public>, x: Scalar<Public>, q: Scalar<Public>, t: Scalar<Public>) -> Scalar<Public, Zero> {
+    fn g_offset(&self, e: Scalar<Public>, x: Scalar<Public>, q: Scalar<Public>, t: Scalar<Public>, lambda: Scalar<Public>) -> Scalar<Public, Zero> {
         let t_pows = t_pows(t, self.gens.H_vec.len());
         dbg!(&t_pows.len());
         let q_inv_pows = q_inv_pows(q, self.gens.G_vec.len());
         let q_pows = q_pows(q, self.gens.G_vec.len());
 
-        let alpha_d = alpha_d(self.base, self.num_digits());
-        let alpha_r2 = alpha_r2(self.num_digits(), e);
-        let alpha_d_q_inv_pow = alpha_d_q_inv_pow(self.base, self.num_digits(), &q_inv_pows);
-        let alpha_r = alpha_r(self.num_digits(), x);
+        let alpha_d = alpha_d(self.base, self.num_digits_per_proof(), self.num_proofs(), lambda);
+        let alpha_r2 = alpha_r2(self.total_num_digits(), e);
+        let alpha_d_q_inv_pow = alpha_d_q_inv_pow(self.base, self.num_digits_per_proof(), self.num_proofs(), &q_inv_pows, lambda);
+        let alpha_r = alpha_r(self.total_num_digits(), x);
         let alpha_m_q_inv_pows = alpha_m_q_inv_pows(e, x, self.base as usize, &q_inv_pows);
         let alpha_m = alpha_m(e, x, self.base as usize);
 
         let t5 = &t_pows[5];
         let t4 = &t_pows[4];
         let two_t_5 = s!(t5 + t5).mark_zero().public();
-        let two_t_5_v = vec![two_t_5; self.num_digits()];
+        let two_t_5_v = vec![two_t_5; self.total_num_digits()];
         let v_hat_1 = dot(&two_t_5_v, &q_pows);
 
         let v_hat_2 = dot(&alpha_d, &alpha_r2);
@@ -477,7 +508,7 @@ impl<'a> Verifier<'a> {
 
     pub fn verify(&self, transcript: &mut Transcript, prf: &Proof) -> bool {
         let e = self.r1_challenge_e(transcript, prf);
-        let (x, y, r, q) = self.r2_challenges(transcript, prf);
+        let (x, y, r, q, lambda) = self.r2_challenges(transcript, prf);
         let t = self.r3_challenge(transcript, prf);
         let y = y.mark_zero();
         let t_pows = t_pows(t, self.gens.H_vec.len());
@@ -516,19 +547,25 @@ impl<'a> Verifier<'a> {
         dbg!(&v);
 
         // Compute the commitment to the public values
-        let g_offset = self.g_offset(e, x, q, t);
+        let g_offset = self.g_offset(e, x, q, t, lambda);
         println!("g_offset: {}", g_offset);
         println!("total {}", s!(g_offset + 10));
-        let g_vec_pub_offsets = self.g_vec_pub_offsets(e, x, q, t);
+        let g_vec_pub_offsets = self.g_vec_pub_offsets(e, x, q, t, lambda);
 
         let Proof { r1_comm, r2_comm, r3_comm, w, l, norm_proof } = prf;
-        let (S, M, D, R, V) = (&r3_comm.S, &r1_comm.M, &r1_comm.D, &r2_comm.R, self.V);
+        let (S, M, D, R) = (&r3_comm.S, &r1_comm.M, &r1_comm.D, &r2_comm.R);
         let (t2, t3, t5) = (&t_pows[2], &t_pows[3], &t_pows[5]);
 
         let G_v = secp256kfun::op::lincomb(w.iter(), &self.gens.G_vec);
         let H_v = secp256kfun::op::lincomb(l.iter(), self.gens.H_vec.iter().take(6));
 
-        let C = g!(S + t*M + t2*D + t3*R + t5*V + t5*V);
+        let mut C = g!(S + t*M + t2*D + t3*R);
+        let mut lambda_pow_i = s!(1);
+        for V_i in self.V.iter() {
+            let coeff = s!(lambda_pow_i * 2 * t5);
+            C = g!(C + coeff*V_i);
+            lambda_pow_i = s!(lambda_pow_i * lambda);
+        }
         // {
         //     // let C = g!(t*M + t2*D + t3*R + t5*V + t5*V);
         //     // let C2 = g!(t5*V + t5*V);
@@ -559,9 +596,11 @@ impl<'a> Verifier<'a> {
 }
 
 
-fn r1_challenge_e(t: &mut Transcript, r1_comm: &Round1Commitments, n: u64, b: u64, V: &Point) -> Scalar<Public> {
+fn r1_challenge_e(t: &mut Transcript, r1_comm: &Round1Commitments, n: u64, b: u64, V: &[Point]) -> Scalar<Public> {
     t.append_message(b"Bulletproofs++");
-    t.append_message(&V.to_bytes());
+    for V_i in V {
+        t.append_message(&V_i.to_bytes());
+    }
     t.append_message(&n.to_le_bytes());
     t.append_message(&b.to_le_bytes());
     t.append_message(&r1_comm.D.normalize().to_bytes());
@@ -570,13 +609,15 @@ fn r1_challenge_e(t: &mut Transcript, r1_comm: &Round1Commitments, n: u64, b: u6
     // Scalar::one().public()
 }
 
-fn r2_challenges(t: &mut Transcript, r2_comm: &Round2Commitments) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
+fn r2_challenges(t: &mut Transcript, r2_comm: &Round2Commitments) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
     t.append_message(&r2_comm.R.normalize().to_bytes());
     let x = merlin_scalar(t, b"x");
     let y = merlin_scalar(t, b"y");
     let r = merlin_scalar(t, b"r");
+    // let lambda = merlin_scalar(t, b"lambda");
+    let lambda = Scalar::one();
     let q = s!(r * r).public();
-    (x, y, r, q)
+    (x, y, r, q, lambda)
     // let two  = Scalar::from(2u32).public().non_zero().unwrap();
     // (Scalar::one().public(), Scalar::one().public(), Scalar::one().public())
 }
@@ -683,21 +724,26 @@ fn q_inv_pows(q: Scalar<Public>, n: usize) -> Vec<Scalar<Public>> {
 
 /// Compute a vector of powers of b (1, b, b^2, b^3, ...) X q_inv_pows
 /// Size must be number of digits
-fn alpha_d_q_inv_pow(b: u64, n: usize, q_inv_pows: &[Scalar<Public>]) -> Vec<Scalar<Public, Zero>> {
-    let res = alpha_d(b, n);
+fn alpha_d_q_inv_pow(b: u64, num_digits: usize, num_proofs: usize, q_inv_pows: &[Scalar<Public>], lambda: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
+    let res = alpha_d(b, num_digits, num_proofs, lambda);
     hadamard(&res, &q_inv_pows)
 }
 
 /// Compute a vector of powers of b (1, b, b^2, b^3, ...)
 /// Size must be number of digits
-fn alpha_d(b: u64, n: usize) -> Vec<Scalar<Public, Zero>> {
+fn alpha_d(b: u64, num_digits: usize, num_proofs: usize, lambda: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
     let b = Scalar::<Public, _>::from(b as u32);
-    let mut res = Vec::with_capacity(n as usize);
-    let mut b_pow = Scalar::<Public>::one().mark_zero();
-    for _ in 0..n {
-        res.push(b_pow);
-        b_pow = s!(b_pow * b).public();
+    let mut res = Vec::with_capacity(num_digits as usize);
+    let mut lambda_pow_i = Scalar::one();
+    for _ in 0..num_proofs {
+        let mut b_pow = Scalar::<Public>::one().mark_zero();
+        for _ in 0..num_digits {
+            res.push(s!(b_pow * lambda_pow_i).public());
+            b_pow = s!(b_pow * b).public();
+        }
+        lambda_pow_i = s!(lambda_pow_i * lambda).public();
     }
+
     res
 }
 
@@ -719,14 +765,14 @@ fn alpha_m(e: Scalar<Public>, x: Scalar<Public>, n: usize) -> Vec<Scalar<Public,
     res
 }
 
-// Compute a vector of scalar -x
+/// Compute a vector of scalar -x
 fn alpha_r_q_inv_pow(n: usize, x: Scalar<Public>, e: Scalar<Public>, q_inv_pows: &[Scalar<Public>]) -> Vec<Scalar<Public, Zero>> {
     let res = alpha_r(n, x);
     let alpha_r = hadamard(&res, q_inv_pows);
     add_vecs(&alpha_r, &alpha_r2(n, e))
 }
 
-// Compute a vector of scalar -x
+/// Compute a vector of scalar -x
 fn alpha_r(n: usize, x: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
     let mut res = Vec::with_capacity(n as usize);
     let minus_one = Scalar::<Public,_>::minus_one().public();
@@ -829,36 +875,53 @@ mod tests{
     use super::*;
 
     // Test prove and verify
-    fn _test_rangeproof(base: u64, num_bits: u64, v: u64) {
+    fn _test_rangeproof(base: u64, num_bits: u64, v: Vec<u64>) {
         let num_h = 8;
         let num_base_bits = crate::log(base as usize) as u64;
-        let num_digits = num_bits / num_base_bits;
-        let num_g = std::cmp::max(num_digits, base) as u32;
-        let gamma = Scalar::from(3);
+        let num_digits_per_proof = num_bits / num_base_bits;
+        let num_proofs = v.len() as u64;
+        let num_g = (std::cmp::max(num_digits_per_proof, base) * num_proofs)  as u32;
+        let mut gamma = vec![];
+        for _ in 0..v.len() {
+            gamma.push(Scalar::random(&mut thread_rng()).mark_zero());
+            // gamma.push(s!(3).mark_zero());
+        }
 
         let gens = BaseGens::new(num_g, num_h);
-        let V = commit(&gens, v, &gamma).normalize();
-        let prover = Prover::new(&gens, base, num_bits, &V, v, gamma);
+        let mut V = vec![];
+        for (v_i, gamma_i) in v.iter().zip(gamma.iter()) {
+            V.push(commit(&gens, *v_i, gamma_i).normalize());
+        }
+        let prover = Prover::new(&gens, base, num_bits, V.clone(), v, gamma);
         let mut transcript = Transcript::new(b"BPP/tests");
         let prf = prover.prove(&mut thread_rng(), &mut transcript);
 
         let mut transcript = Transcript::new(b"BPP/tests");
-        let verifier = Verifier::new(&gens, base, num_bits, &V);
+        let verifier = Verifier::new(&gens, base, num_bits, V);
         assert!(verifier.verify(&mut transcript, &prf));
     }
 
     #[test]
     fn test_rangeproof() {
+        _test_rangeproof(2, 4, vec![1, 2, 3, 4]);
         for i in 0..16 {
-            _test_rangeproof(2, 4, i);
+            _test_rangeproof(2, 4, vec![i]);
+            _test_rangeproof(2, 4, vec![i, 15 - i]);
         }
-        _test_rangeproof(16, 4, 7);
-        _test_rangeproof(16, 8, 243);
-        _test_rangeproof(16, 16, 12431);
-        _test_rangeproof(16, 32, 134132);
-        for _ in 0..100 {
-            let v = rand::random::<u64>();
+        _test_rangeproof(16, 4, vec![7]);
+        _test_rangeproof(16, 8, vec![243]);
+        _test_rangeproof(16, 16, vec![12431]);
+        _test_rangeproof(16, 32, vec![134132, 14354, 981643, 875431]);
+        for _ in 0..10 {
+            let mut v = vec![];
+            for _ in 0..8 {
+                v.push(rand::random::<u64>());
+            }
             _test_rangeproof(16, 64, v);
+        }
+        for _ in 0..10 {
+            let v = rand::random::<u64>();
+            _test_rangeproof(16, 64, vec![v]);
         }
     }
 
