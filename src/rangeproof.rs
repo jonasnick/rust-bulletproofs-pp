@@ -66,6 +66,20 @@ struct Round3Secrets {
     l: Poly<Secret>,
 }
 
+
+/// BP++ Rangeproof Prover state.
+/// The prover state across rounds of the protocol.
+///
+/// # Notation
+///
+/// In each round of the protocol, the prover computes a commitment of the following form:
+///
+/// X = b_i * G + <x_i, G_i> + <l_x_i, H_i>. Here
+///     - G is the base generator. G_i generators are associated with n_vec in norm argument
+/// while H_i generators are associated with l_vec.
+///     - X is the output commitment. (in our case: D, M, R, S) for each round
+///     - x_i is the witness vector. (in our case: x = {d, m, r, s})
+///     - l_x_i is the blinding vector. (in our case: l_x = {b_d, b_m, b_r, b_s})
 #[derive(Debug, Clone)]
 pub struct Prover<'a>{
     /// The base generators
@@ -74,12 +88,11 @@ pub struct Prover<'a>{
     base: u64,
     /// `n` number of bits in the value to be proven(32, 64, 128) in base 2
     num_bits: u64,
-    /// The commitment to the value
+    /// The commitments to the values being proven. One commitment each per aggregated proof
     V: Vec<Point>,
-    /// The value to prove
+    /// The corresponding values committed in V. One value each per aggregated proof
     v: Vec<u64>,
-    /// The blinding factor. In bulletproofs++, this is actually a vector of 8 values
-    /// but as a convention, we set the remaining 7 values to 0.
+    /// Corresponding blinding factors for the commitments in V. One blinding factor each per aggregated proof
     gamma: Vec<Scalar<Secret, Zero>>,
     /// Round 1 commitments
     r1_comm: Option<Round1Commitments>,
@@ -123,7 +136,9 @@ pub struct Proof {
     norm_proof: NormProof,
 }
 
-// Create a commit C = vG + gamma*H_0
+/// Create a Bulletproofs++ pedersen commitment. For simplicity, we only blind
+/// using the first component in H.
+/// Create a commit C = vG + gamma*H_0
 pub fn commit(gens: &BaseGens, v: u64, gamma: &Scalar<Secret, Zero>) -> Point<NonNormal> {
     let mut bytes = [0u8; 32];
     bytes[24..].copy_from_slice(&v.to_be_bytes());
@@ -139,6 +154,7 @@ impl<'a> Prover<'a> {
         self.V.len()
     }
 
+    /// Creates a new prover instance.
     pub fn new(gens: &'a BaseGens, base: u64, num_bits: u64, V: Vec<Point>, v: Vec<u64>, gamma: Vec<Scalar<Secret, Zero>>) -> Self {
         assert!(base.is_power_of_two());
         assert!(num_bits.is_power_of_two());
@@ -158,7 +174,43 @@ impl<'a> Prover<'a> {
         self.num_bits as usize/ crate::log(self.base as usize)
     }
 
-    /// Proving in base n
+    /// Round 1: Commit to the base representation of the value and multiplicities
+    ///
+    /// # The digits commitment: D
+    ///
+    /// The prover first computes the base [Prover].base representation of the value to be proven.
+    /// The computes the commitment D = b_d * G + <d_i, G_i> + <l_d_i, H_i> where d_i
+    /// is the i-th digit of the base b representation of the value to be proven. The values
+    /// b_d is chosen randomly, while l_d_i is chosen according to _some_ constraint that we will
+    /// explain later. Informally, b_d being random is sufficient to prove that the commitment is hiding.
+    ///
+    /// When aggregating proofs, d_i is the concatenation of the base b representation of all values.
+    /// For example, base 4, num_bits = 4, v = [9, 13] (two digits per value).
+    ///             d_vec = [1, 2, 1, 3]
+    ///                     (1, 2) (1, 3)
+    ///                     (4*2 + 1) (4*3 + 1)
+    ///                      9        13
+    ///
+    /// # The multiplicity commitment: M
+    ///
+    /// The prover computes the commitment M = b_m * G + <m_i, G_i> + <l_m_i, H_i> where m_i
+    /// is the multiplicity of the i-th digit in the base b representation of the value to be proven.
+    /// The values b_m, and l_m_i are chosen uniformly at random. Similar to the digits commitment,
+    /// b_m being random is sufficient to prove that the commitment is hiding. Multiplicity denotes
+    /// the number of times a digit appears in the base b representation of the value to be proven.
+    ///
+    /// Now, there are two choices for how we want to commit the multiplicities when aggregating proofs.
+    /// 1) Inline multiplicity mode: In this mode, the prover commits to the multiplicities of all digits
+    /// one after another by concatenating the base b representation of all values.
+    /// For the above example, this would be: a) m_vec for 9 = [0, 1, 1, 0] and m_vec for 13 = [0, 1, 0, 1]
+    /// The final m_vec would be [0, 1, 1, 0, 0, 1, 0, 1].
+    /// 2) Shared multiplicity mode: In this mode, the prover commits to the multiplicities of all digits
+    ///   in the base b representation of all values. For example, base 4, num_bits = 4, v = [9, 13] (two digits per value).
+    ///   For the above example, the m_vec would be [0, 1, 1, 0] + [0, 1, 0, 1] = [0, 2, 1, 1].
+    ///
+    /// For the implementation, we use the shared multiplicity mode. The current implementation is not
+    /// compatible for multi-party proving, since the prover needs to know the multiplicities of all
+    /// digits in the base b representation of all values. We do not concern with this for now.
     fn prove_round_1<R: CryptoRng + RngCore>(&mut self, rng: &mut R) {
         let num_base_bits = crate::log(self.base as usize);
         let num_digits_per_proof = self.num_digits_per_proof();
@@ -194,6 +246,14 @@ impl<'a> Prover<'a> {
         self.r1_comm = Some(Round1Commitments { D, M });
     }
 
+
+    /// Prover Round 2: Prover has committed to d_vec and m_vec in the previous round. Received challenge e.
+    ///
+    /// # The reciprocal commitment: R
+    ///
+    /// The prover computes the commitment R = b_r * G + <r_i, G_i> + <l_r_i, H_i> where r_i = (1/ (e + d_i))
+    /// l_r_i are chosen to be all zeros. As before, the values b_r being random is sufficient to prove that the commitment is hiding.
+    ///
     fn prove_round_2<R: CryptoRng + RngCore>(&mut self, rng: &mut R, e: Scalar<Public>) {
         // compute r_i = (1/ (e + d_i))
         let r = self.r1_sec.as_ref().unwrap().d.iter().
@@ -205,6 +265,80 @@ impl<'a> Prover<'a> {
         self.r2_comm = Some(Round2Commitments { R });
     }
 
+    /// Prover Round 3: Prover has committed to r_vec in the previous round.
+    ///                 Received challenge (x, y, q, lambda). Already has e from round 1
+    ///
+    /// # Witness algebraic relations:
+    ///
+    /// There are three relations of interest that we need to prove amongst the committed values. We will first
+    /// explain the protocol without aggregation, and then explain how to aggregate the proofs.
+    /// 1) v = <d_i, b^i> // We refer to this as "Sum value constraint"
+    /// 2) r_i = (1/ (e + d_i)) // We refer to this as "Reciprocal value constraint"
+    /// 3) <m_i, (1 / (e + i))> = <r_i, 1> // We refer to this as "Range check constraint"
+    ///
+    /// 3) is the most interesting one and a core contribution of BP++ paper. This proves that
+    /// all the digits are in the range [0, b-1]. This can intuitively seen as follows:
+    /// Sum_j(m_j/e + i) = Sum_i(1/(e + d_i)) where j = 0..b-1, i = 0..num_digits
+    ///
+    /// Since e is a random challenge, the above equation is true with high probability for all X.
+    /// Sum_j(m_j/X + i) = Sum_i(1/(X + d_i)) = 1. Meaning, that d_i are representable using only
+    /// (1/X + i) poles where i = 0..b-1. Therefore, d_i must be in the range [0, b-1].
+    ///
+    /// # Mapping to norm argument:
+    ///
+    /// To reduce this to norm argument, we construct n and l as follows:
+    /// n_vec = s_vec + m_vec*T + d_vec*T^2 + r_vec*T^3 + alpha_m_vec*T^4 + alpha_d_vec*T^3 + alpha_r_vec*T^2
+    /// l_vec = l_s_vec + l_m_vec*T + l_d_vec*T^2 + l_r_vec*T^3 + 2*gamma*T^5 (blinding factor)
+    /// C = S + M*T + D*T^2 + R*T^3 + 2*V*T^5 + _P_ (P is some public value that we will compute as we proceed)
+    ///
+    /// P = 0
+    /// P += <alpha_m_vec*t^4, G_vec> + <alpha_d_vec*t^3, G_vec> + <alpha_r_vec*t^2, G_vec> (We will update P as we balance other constraints)
+    /// The values t denote concrete challenges, while T denotes the unknown challenge. Prover does not know `t` and
+    /// must make sure that the above equation holds for all `t`.
+    ///
+    /// There are a few important points to note here:
+    /// 1) All of the vectors are parameterized over unknown T. We want the norm argument to hold for all T,
+    /// and in the co-efficient of T^5, is where we will check all our constraints. All other co-efficients
+    /// of T^i will be made zero by choosing the l_s_i vector adaptively. In detail, we will choose l_s_i
+    /// such that C, n_vec, l_vec following the relation in norm argument.
+    /// C = <n_vec, G> + <l_vec, H> + (|n_vec|_q + <l_vec, c_vec>) G for all T.
+    /// Here c_vec = y*[T, T^2, T^3, T^4, T^6, T^7, 0, 0]. Crucially, this is missing T^5, which is where we
+    /// will check our constraints.
+    /// Because we don't know the value of T(verifier chosen challenge from next round), we must choose l_s_i
+    /// such that C, n_vec, l_vec following the relation in norm argument for all T. We can do this by expanding the expression
+    /// and solving for l_s_i. But crucially, l_s_i cannot interfere with the co-efficients of T^5. l_s_i also cannot
+    /// balance co-efficients above T^7. This is not an issue, because this simply translates into some constraints in
+    /// choosing our blinding values. Refering back to Round 1, we can now see why we needed l_d(4) = -l_m(5). Skipping
+    /// some calculation, if we expand n_vec here, we can see that co-eff of T^8 can only be zero is l_d(4) = -l_m(5).
+    ///
+    /// 2) We have also added public constants alpha_m_vec, alpha_d_vec, alpha_r_vec to the n_vec. These would be where
+    /// we would check our relations. m_vec which has a T power 1, has a corresponding alpha_m_vec with T power 4 so that
+    /// when multiplied, the result is in T^5 is alpha_m_vec. Similarly, d_vec has a T power 2, and alpha_d_vec has a
+    /// T power 3. This is because we want to check the relations in T^5. We will see how this is done in the next step.
+    ///
+    /// # Combining constraints with multiple challenges:
+    ///
+    /// This is a general principle in cryptography and snarks. We can combine multiple constraints into one by
+    /// using challenges. If C1 and C2 are two constraints, we can combine them into one constraint C by using
+    /// a challenge x. C = C1 + x*C2. This can be extended to multiple constraints. If we have C1, C2, .. Ci.. Cn,
+    /// we can use a single challenge q to combine all of them into one constraint C.
+    /// C = C1 + q*C2 + q^2*C3 + ... + q^(n-1)*Cn. In the next section, we describe which challenges separate
+    /// the constraints.
+    ///
+    /// # Diving into constraints:
+    ///
+    /// 1) Sum value constraint: We want to check that v = <d_i, b^i>. If we choose alpha_d_vec = [b^0/q^1, b^1/q^2, b^2/q^3, ...], then
+    /// we can check this by checking that <d_i, alpha_d_vec>_q (q weighted norm) = v. This nicely cancels out the q^i
+    /// that would have resulted from q weighted norm and brings everything without a power of Q. challenge constraints:
+    /// (Q^0, X^0, Y^0)
+    ///
+    /// 2) Reciprocal constraint: We want to check that 1/(e + d_i) = r_i. We choose alpha_r1 = [e/q^1, e/q^2, e/q^3, ..e_n].
+    /// When computing |n_vec|_q = |d_vec*T^2 + r_vec^3 + alpha_r_vec*T^2 + alpha_d_vec*T^3 + ....|_q.
+    ///
+    /// Let's consider the co-eff of q^i and x^0 = 2(d_i*r_i + e*r_i) = 2.
+    /// (As per definition of r_i = 1/(e + d_i) =>  r_i*e + r_i*d_i = 1). To check against the constant 2, Verifier adds
+    /// a commitment P += 2*T^5*<1_vec, q_pows_vec>G (We will add more terms to P later).
+    ///
     fn prove_round_3<R: CryptoRng + RngCore>(&mut self, rng: &mut R, x: Scalar<Public>, y: Scalar<Public>, q: Scalar<Public>, e: Scalar<Public>, lambda: Scalar<Public>) {
         let d = self.r1_sec.as_ref().unwrap().d.clone();
         let m = self.r1_sec.as_ref().unwrap().m.clone();
