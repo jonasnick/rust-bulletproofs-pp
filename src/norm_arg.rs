@@ -216,7 +216,6 @@ impl NormProof {
                 let (g0, g1) = alter_iter(Gs);
 
 
-                dbg!(&l);
                 let (l0, l1) = alter_iter(l);
                 let (c0, c1) = alter_iter(c);
                 let (h0, h1) = alter_iter(Hs);
@@ -229,7 +228,6 @@ impl NormProof {
                 let X_v = &s!(X_v0 + X_v1 + 2 * r_inv * X_v2);
                 // assert_eq!(*X_v, {let wa = w0[0]; let wb = w1[0]; s!(2*wa *wb*q_sq*r_inv)});
 
-                dbg!(&X_v);
                 let mut X = g!(X_v * G);
 
                 // X = X + <g0, w1>*r + <g1, w0>/r + <h0, l1> + <h1, l0>
@@ -237,10 +235,6 @@ impl NormProof {
                 let X2 = point_inner_product(&g1, &w0);
                 let X3 = point_inner_product(&h0, &l1);
                 let X4 = point_inner_product(&h1, &l0);
-                dbg!(&X1);
-                dbg!(&X2);
-                dbg!(&X3);
-                dbg!(&X4);
                 X = g!(X + r * X1 + r_inv * X2 + X3 + X4);
 
                 let R_v_0 = inner_product(&c1, &l1);
@@ -456,10 +450,10 @@ impl NormProof {
         let l = Scalar::from_slice(&buf[len - 32..len])?;
 
         return Some(NormProof {
-            x_vec : x_vec,
-            r_vec : r_vec,
-            n: n,
-            l: l,
+            x_vec,
+            r_vec,
+            n,
+            l,
         });
     }
 }
@@ -479,6 +473,7 @@ fn rand_scalar_vec(l: u32) -> Vec<PubScalarZ> {
     (0..l).map(|_| rand_scalar()).collect()
 }
 
+#[allow(dead_code)]
 pub(crate) fn tester(sz_n: u32, sz_l: u32) {
     let gens = BaseGens::new(sz_n, sz_l);
 
@@ -509,7 +504,6 @@ pub(crate) fn tester(sz_n: u32, sz_l: u32) {
     );
     // test norm argument prove
     let prf = NormProof::prove(&mut transcript, gens.clone(), n, l, c.clone(), r);
-    dbg!(&prf);
 
     let mut transcript = Transcript::new(b"test");
     assert!(prf.verify(

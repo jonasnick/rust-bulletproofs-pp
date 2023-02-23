@@ -1,7 +1,5 @@
 #![allow(non_snake_case)]
 
-use core::num;
-
 /// Rangeproof implementation using norm argument
 use crate::transcript::Transcript;
 use crate::norm_arg::{self, NormProof};
@@ -59,6 +57,7 @@ struct Round3Commitments {
 #[derive(Debug, Clone)]
 struct Round3Secrets {
     /// Round 3 blinding factor b_s
+    #[allow(dead_code)]
     b_s: Scalar,
     /// Final w_v(T) polynomial
     w: Poly<Secret>,
@@ -128,10 +127,6 @@ pub struct Proof {
     r2_comm: Round2Commitments,
     /// Round 3 commitments
     r3_comm: Round3Commitments,
-    /// w vector
-    w: Vec<Scalar<Public, Zero>>,
-    /// l vector
-    l: Vec<Scalar<Public, Zero>>,
     /// norm proof
     norm_proof: NormProof,
 }
@@ -217,7 +212,6 @@ impl<'a> Prover<'a> {
         let total_num_digits = self.total_num_digits();
 
         let mut d = Vec::with_capacity(total_num_digits);
-        println!("total num_digits: {}", total_num_digits);
         for v in self.v.iter() {
             let mut v1 = *v;
             for _ in 0..num_digits_per_proof {
@@ -235,7 +229,7 @@ impl<'a> Prover<'a> {
         let d = d.into_iter().map(|x| Scalar::from(x as u32)).collect::<Vec<_>>();
         let m = m.into_iter().map(|x| Scalar::from(x as u32)).collect::<Vec<_>>();
 
-        let mut l_m = std::iter::repeat(Scalar::random(rng).mark_zero()).take(6).collect::<Vec<_>>();
+        let l_m = std::iter::repeat(Scalar::random(rng).mark_zero()).take(6).collect::<Vec<_>>();
         let mut l_d = std::iter::repeat(Scalar::zero()).take(6).collect::<Vec<_>>();
         l_d[4] = -l_m[5].clone();
         l_d[2] = -l_m[3].clone();
@@ -385,7 +379,7 @@ impl<'a> Prover<'a> {
     /// P += <alpha_m_vec*t^4, G_vec> + <alpha_d_vec*t^3, G_vec> + <alpha_r1_vec*t^2, G_vec> + <alpha_r2_vec*t^2, G_vec> // Commitments to alpha_i in G_vec
     /// P += 2*T^5*<alpha_d_vec, alpha_r2>*G // Reciprocal constraint public term i G // Refered as v_hat1 in code
     /// P += 2*T^5*x<q_pow_inv*alpha_d_vec, alpha_r1> // Range check constraint public term in G // Refered as v_hat2 in code
-    /// P += P += 2*T^5*<1_vec, q_pows_vec>G // Sum value constant in G // Refered as v_hat3 in code
+    /// P += 2*T^5*<1_vec, q_pows_vec>G // Sum value constant in G // Refered as v_hat3 in code
     /// P += 2*x^2T^8*|alpha_m|_q*G // T^8 public term in G // Refered as v_hat4 in code
     ///
     fn prove_round_3<R: CryptoRng + RngCore>(&mut self, rng: &mut R, x: Scalar<Public>, y: Scalar<Public>, q: Scalar<Public>, e: Scalar<Public>, lambda: Scalar<Public>) {
@@ -413,7 +407,6 @@ impl<'a> Prover<'a> {
         };
 
         let w_w_q = w_vec.w_q_norm(q);
-        dbg!(&w_w_q);
         let y_inv = y.invert();
         let y = y.mark_zero();
         let c = c_poly(y);
@@ -427,38 +420,23 @@ impl<'a> Prover<'a> {
             coeffs: vec![Vec::new(), l_m, l_d, l_r, Vec::new(), vec![gamma_delta], Vec::new(), Vec::new()],
         };
         let l_vec_w_q = l_vec.mul_c(&c);
-        dbg!(&l_vec_w_q);
         let mut l_s = Vec::with_capacity(self.gens.H_vec.len());
         for i in 0..self.gens.H_vec.len() {
             let w_w_q_i = &w_w_q[i];
             let l_vec_w_q_i = &l_vec_w_q[i];
-            dbg!(i, s!(w_w_q_i + l_vec_w_q_i));
             l_s.push(s!(-w_w_q_i - l_vec_w_q_i));
         }
         let (b_m, b_d, b_r) = (&self.r1_sec.as_ref().unwrap().b_m, &self.r1_sec.as_ref().unwrap().b_d, &self.r2_sec.as_ref().unwrap().b_r);
         let arr = [b_m, b_d, b_r];
-        dbg!(&arr);
         for (i, b_i) in arr.into_iter().enumerate() {
             let l_s_i = &l_s[i + 1];
             l_s[i + 1] = s!(l_s_i + b_i);
-        }
-        {
-            // print ls
-            for (i, l_s_i) in l_s.iter().enumerate() {
-                dbg!(-l_s_i);
-            }
         }
         l_s.remove(5);
         l_s.remove(0);
         for l_s_i in l_s.iter_mut() {
             let borrow_ls_i = &*l_s_i;
             *l_s_i = s!( borrow_ls_i * y_inv);
-        }
-        {
-            // print ls
-            for (i, l_s_i) in l_s.iter().enumerate() {
-                dbg!(i, -l_s_i);
-            }
         }
         l_vec.coeffs[0] = l_s.clone();
         // Compute b_s = q^(i+1)s[i]
@@ -469,22 +447,6 @@ impl<'a> Prover<'a> {
             let s_i = &s[i];
             b_s = s!(b_s + q_pow * s_i * s_i);
             q_pow = s!(q_pow * q).public();
-        }
-        // Test assertions
-        {
-            let w2 = w_vec.w_q_norm(q);
-            let l2 = l_vec.mul_c(&c);
-            let res = add_vecs(&w2, &l2);
-
-            let v = vec![
-                -b_s.clone(), -b_d.clone().mark_zero(), -b_m.clone().mark_zero(), -b_r.clone().mark_zero()
-            ];
-
-            let res2 = add_vecs(&res, &v);
-
-            dbg!(&res);
-            dbg!(&v);
-            dbg!(&res2);
         }
         // Compute S = s*G_vec + l_s*H_vec + b_s*G
         let mut S = g!(b_s * G);
@@ -516,11 +478,6 @@ impl<'a> Prover<'a> {
     /// Run the norm argument on the obtained challenge t. If we have sent the correct commiments, we only
     /// need to evaluate the poly w_vec at t and the poly l_vec at t. and run the norm argument on them
     fn proof(self, y: Scalar<Public>, t: Scalar<Public>, r: Scalar<Public>, transcript: &mut Transcript) -> Proof {
-        fn print_neg_vec(v: &[Scalar<Public, Zero>]) {
-            for (i, v_i) in v.iter().enumerate() {
-                println!("{} {} {} {}", i, -v_i, v_i, s!(v_i + v_i));
-            }
-        }
         let r3_sec = self.r3_sec.unwrap();
         let w_eval = r3_sec.w.eval(t);
         let mut l_eval = r3_sec.l.eval(t);
@@ -547,8 +504,6 @@ impl<'a> Prover<'a> {
             r1_comm: self.r1_comm.unwrap(),
             r2_comm: self.r2_comm.unwrap(),
             r3_comm: self.r3_comm.unwrap(),
-            w: w_eval,
-            l: l_eval,
             norm_proof: norm_prf,
         }
     }
@@ -558,21 +513,14 @@ impl<'a> Prover<'a> {
         // Round 1
         self.prove_round_1(rng);
         let e = self.r1_challenge_e(transcript);
-        dbg!(&self.r1_sec);
 
         // Round 2
         self.prove_round_2(rng, e);
         let (x, y, r, q, lambda) = self.r2_challenges(transcript);
-        dbg!(&self.r2_sec);
-        {
-            let temp = &self.r2_sec.as_ref().unwrap().r[0];
-            let res = s!(temp + temp);
-        }
 
         // Round 3
         self.prove_round_3(rng, x, y, q, e, lambda);
         let t = self.r3_challenge(transcript);
-        dbg!(&self.r3_sec);
 
         // Round 4
         self.proof(y, t, r, transcript)
@@ -614,7 +562,9 @@ impl<'a> Verifier<'a> {
         r3_challenge(t, &prf.r3_comm)
     }
 
-    // The public values to be added to w
+    /// Compute the public offsets for P in along G_vec.
+    /// This computes
+    /// P = alpha_d_vec * t^3 + alpha_r1_vec * t^2 + alpha_r2_vec * t^2 + alpha_m_vec * t^4
     fn g_vec_pub_offsets(&self, e: Scalar<Public>, x: Scalar<Public>, q: Scalar<Public>, t: Scalar<Public>, lambda: Scalar<Public>) -> Vec<Scalar<Public, Zero>> {
         let t_pows = t_pows(t, self.gens.H_vec.len());
         let q_inv_pows = q_inv_pows(q, self.gens.G_vec.len());
@@ -629,12 +579,17 @@ impl<'a> Verifier<'a> {
         let alpha_m_t_4 = scalar_mul_vec(&alpha_m, t_pows[4]);
 
         let res = add_vecs(&alpha_d_t_3, &alpha_r_t_2);
-        dbg!(add_vecs(&res, &alpha_m_t_4))
+        add_vecs(&res, &alpha_m_t_4)
     }
 
+    /// Compute the public offsets for P in along G
+    /// This computes v_hat as (explained in prover round 3)
+    /// P += 2*T^5*<alpha_d_vec, alpha_r2>*G // Reciprocal constraint public term i G // Refered as v_hat1 in code
+    /// P += 2*T^5*x<q_pow_inv*alpha_d_vec, alpha_r1> // Range check constraint public term in G // Refered as v_hat2 in code
+    /// P += 2*T^5*<1_vec, q_pows_vec>G // Sum value constant in G // Refered as v_hat3 in code
+    /// P += 2*x^2T^8*|alpha_m|_q*G // T^8 public term in G // Refered as v_hat4 in code
     fn g_offset(&self, e: Scalar<Public>, x: Scalar<Public>, q: Scalar<Public>, t: Scalar<Public>, lambda: Scalar<Public>) -> Scalar<Public, Zero> {
         let t_pows = t_pows(t, self.gens.H_vec.len());
-        dbg!(&t_pows.len());
         let q_inv_pows = q_inv_pows(q, self.gens.G_vec.len());
         let q_pows = q_pows(q, self.gens.G_vec.len());
 
@@ -660,11 +615,12 @@ impl<'a> Verifier<'a> {
         let v_hat_4 = dot(&alpha_m_q_inv_pows, &alpha_m);
         let v_hat_4 = s!(v_hat_4 * t4 * t4).mark_zero().public();
 
-        dbg!(s!(v_hat_1 + v_hat_2 + v_hat_3));
-        dbg!(v_hat_4);
         s!(v_hat_1 + v_hat_2 + v_hat_3 + v_hat_4).mark_zero().public()
     }
 
+    /// Compute the commitment C and run the norm arg on it
+    /// C = S + t*M + t^2*D + t^3*R + 2t^5*V + P
+    /// P = <g_vec_pub_offsets, G_vec> + g_offset*G
     pub fn verify(&self, transcript: &mut Transcript, prf: &Proof) -> bool {
         let e = self.r1_challenge_e(transcript, prf);
         let (x, y, r, q, lambda) = self.r2_challenges(transcript, prf);
@@ -684,39 +640,13 @@ impl<'a> Verifier<'a> {
             Scalar::zero(),
         ];
 
-        let v = norm_arg::NormProof::v(&prf.w, &prf.l, &c_vec, q);
-        {
-            let (w0, w1, l0, l1, l2, l3, l4, l5) = (
-                &prf.w[0],
-                &prf.w[1],
-                &prf.l[0],
-                &prf.l[1],
-                &prf.l[2],
-                &prf.l[3],
-                &prf.l[4],
-                &prf.l[5],
-            );
-            let res = s!(w0*w0 + w1*w1);
-            println!("w0*w0 + w1*w1 = {}", res);
-            let res2 = s!(l0*t + l1*t2 + l2*t3 + l3*t4 + l4*t6 + l5*t7);
-            println!("l0 + l1 + l2 + l3 + l4 + l5 = {}", res2);
-            let res3 = s!(res + res2);
-            println!("res + res2 = {}", res3);
-        }
-        dbg!(&v);
-
         // Compute the commitment to the public values
         let g_offset = self.g_offset(e, x, q, t, lambda);
-        println!("g_offset: {}", g_offset);
-        println!("total {}", s!(g_offset + 10));
         let g_vec_pub_offsets = self.g_vec_pub_offsets(e, x, q, t, lambda);
 
-        let Proof { r1_comm, r2_comm, r3_comm, w, l, norm_proof } = prf;
+        let Proof { r1_comm, r2_comm, r3_comm, norm_proof } = prf;
         let (S, M, D, R) = (&r3_comm.S, &r1_comm.M, &r1_comm.D, &r2_comm.R);
         let (t2, t3, t5) = (&t_pows[2], &t_pows[3], &t_pows[5]);
-
-        let G_v = secp256kfun::op::lincomb(w.iter(), &self.gens.G_vec);
-        let H_v = secp256kfun::op::lincomb(l.iter(), self.gens.H_vec.iter().take(6));
 
         let mut C = g!(S + t*M + t2*D + t3*R);
         let mut lambda_pow_i = s!(1);
@@ -725,32 +655,10 @@ impl<'a> Verifier<'a> {
             C = g!(C + coeff*V_i);
             lambda_pow_i = s!(lambda_pow_i * lambda);
         }
-        // {
-        //     // let C = g!(t*M + t2*D + t3*R + t5*V + t5*V);
-        //     // let C2 = g!(t5*V + t5*V);
-        //     dbg!(&t5);
-        //     let ten = Scalar::from(10u32);
-        //     let one = Scalar::one();
-        //     let (two, six) = (Scalar::from(2u32), Scalar::from(6u32));
-        //     let one_half = s!(one + one).non_zero().unwrap().invert();
-        //     let five = Scalar::from(5u32);
-        //     let w1 = &s!(one_half + five);
-        //     dbg!(&w1);
-        //     let (G0, G1) = (&self.gens.G_vec[0], &self.gens.G_vec[1]);
-        //     // assert_eq!(C, g!(w1*G0 + w1*G1 + ten*G + H_v));
-        // }
         let P = secp256kfun::op::lincomb(g_vec_pub_offsets.iter(), &self.gens.G_vec);
         let C = g!(C + P + g_offset * G);
 
-        let C1 = g!(G_v + H_v + v * G);
-        {
-            dbg!(&v);
-            dbg!(&w);
-            dbg!(&l);
-        }
-        assert!(C1 == C);
-        assert!(norm_proof.verify(&self.gens, transcript, C.normalize(), &c_vec, r));
-        C1 == C
+        norm_proof.verify(&self.gens, transcript, C.normalize(), &c_vec, r)
     }
 }
 
@@ -765,7 +673,6 @@ fn r1_challenge_e(t: &mut Transcript, r1_comm: &Round1Commitments, n: u64, b: u6
     t.append_message(&r1_comm.D.normalize().to_bytes());
     t.append_message(&r1_comm.M.normalize().to_bytes());
     merlin_scalar(t, b"e")
-    // Scalar::one().public()
 }
 
 fn r2_challenges(t: &mut Transcript, r2_comm: &Round2Commitments) -> (Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>, Scalar<Public>) {
@@ -773,19 +680,14 @@ fn r2_challenges(t: &mut Transcript, r2_comm: &Round2Commitments) -> (Scalar<Pub
     let x = merlin_scalar(t, b"x");
     let y = merlin_scalar(t, b"y");
     let r = merlin_scalar(t, b"r");
-    // let lambda = merlin_scalar(t, b"lambda");
     let lambda = Scalar::one();
     let q = s!(r * r).public();
     (x, y, r, q, lambda)
-    // let two  = Scalar::from(2u32).public().non_zero().unwrap();
-    // (Scalar::one().public(), Scalar::one().public(), Scalar::one().public())
 }
 
 fn r3_challenge(t: &mut Transcript, r3_comm: &Round3Commitments) -> Scalar<Public> {
     t.append_message(&r3_comm.S.normalize().to_bytes());
     merlin_scalar(t, b"t")
-    // Scalar::from(3u32).public().non_zero().unwrap()
-    // Scalar::from(1).public().non_zero().unwrap()
 }
 
 fn bp_pp_comm<R: CryptoRng + RngCore>(rng: &mut R, gens: &BaseGens, w: &[Scalar<Secret, Zero>], l: &[Scalar<Secret, Zero>]) -> (Scalar, Point<NonNormal>) {
@@ -801,8 +703,8 @@ fn bp_pp_comm<R: CryptoRng + RngCore>(rng: &mut R, gens: &BaseGens, w: &[Scalar<
     (b_r, res.non_zero().unwrap())
 }
 
-fn merlin_scalar(t: &mut Transcript, label: &'static [u8]) -> Scalar<Public> {
-    let mut bytes = t.challenge_bytes();
+fn merlin_scalar(t: &mut Transcript, _label: &'static [u8]) -> Scalar<Public> {
+    let bytes = t.challenge_bytes();
     Scalar::from_bytes(bytes).unwrap().non_zero().unwrap()
 }
 
@@ -1093,7 +995,7 @@ mod tests{
                 vec![Scalar::from(1), Scalar::from(2)],
             ]
         };
-        let b = Poly::<Secret> {
+        let _b = Poly::<Secret> {
             coeffs: vec![
                 vec![Scalar::from(3), Scalar::from(4)],
                 vec![Scalar::from(3), Scalar::from(4)],
