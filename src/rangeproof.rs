@@ -281,7 +281,7 @@ impl<'a> Prover<'a> {
     /// Sum_j(m_j/e + i) = Sum_i(1/(e + d_i)) where j = 0..b-1, i = 0..num_digits
     ///
     /// Since e is a random challenge, the above equation is true with high probability for all X.
-    /// Sum_j(m_j/X + i) = Sum_i(1/(X + d_i)) = 1. Meaning, that d_i are representable using only
+    /// Sum_j(m_j/X + i) = Sum_i(1/(X + d_i)). Meaning, that d_i are representable using only
     /// (1/X + i) poles where i = 0..b-1. Therefore, d_i must be in the range [0, b-1].
     ///
     /// # Mapping to norm argument:
@@ -332,12 +332,61 @@ impl<'a> Prover<'a> {
     /// that would have resulted from q weighted norm and brings everything without a power of Q. challenge constraints:
     /// (Q^0, X^0, Y^0)
     ///
-    /// 2) Reciprocal constraint: We want to check that 1/(e + d_i) = r_i. We choose alpha_r1 = [e/q^1, e/q^2, e/q^3, ..e_n].
+    /// 2) Reciprocal constraint: We want to check that 1/(e + d_i) = r_i. We choose alpha_r1 = [e, e, e, ..e_n].
     /// When computing |n_vec|_q = |d_vec*T^2 + r_vec^3 + alpha_r_vec*T^2 + alpha_d_vec*T^3 + ....|_q.
     ///
     /// Let's consider the co-eff of q^i and x^0 = 2(d_i*r_i + e*r_i) = 2.
     /// (As per definition of r_i = 1/(e + d_i) =>  r_i*e + r_i*d_i = 1). To check against the constant 2, Verifier adds
-    /// a commitment P += 2*T^5*<1_vec, q_pows_vec>G (We will add more terms to P later).
+    /// a commitment P += 2*T^5*<1_vec, q_pows_vec>G (We will keep on adding more terms to P later).
+    ///
+    /// So, challenges constraints at Q^i, X^0, Y^0 ensure all the n reciprocal constraints are satisfied.
+    ///
+    /// 3) Range check constraint: (Check each d_i in [0 b-1])
+    ///
+    /// Using the main theorem of set membership, we want to check the following:
+    ///
+    /// Sum_j(m_j/X + i) = Sum_i(1/(X + d_i)) = Sum_i(r_i) where j = 0..b-1, i = 0..n-1.
+    /// To do this, we choose alpha_m_vec = [1/(e + 0), 1/(e + 1), 1/(e + 2), ... 1/(e + b-1)].
+    /// and alpha_r2_vec = x*[1/q^1, 1/q^2, 1/q^3, ...].
+    ///
+    /// So, the challenge constraints in Q^0, X^1, Y^0 ensures these constraints are satisfied. Note that the challenge
+    /// Y is not really used in these constraints. Y is used to separate out the terms coming in from the linear side(l_vec)
+    /// into the the verification equation.
+    ///
+    ///
+    /// # Balancing out everything else:
+    ///
+    /// We only need to deal with co-effs of T^0, T^5, and T^8 onwards. The co-effs of T^1, T^2, T^3, T^4, T^6, T^7 are
+    /// can easily be made zero by choosing l_s_i adaptively. We simply state the constraints here, the constraints are
+    /// computed by making sure (n_vec, l_vec and C, c_vec) follow the norm relation for all T's.
+    ///
+    /// T^0: Choose b_s = |s|^2_q.
+    /// T^8: ld_vec(4) = -lm_vec(5)
+    /// T^5: ld_vec(2) = -lm_vec(3)
+    ///
+    /// In our construction, all of the witness values that we want to enforce constraints are in n_vec. We have to
+    /// make sure none of the terms from l_vec interfere with the co-efficients of T^5. This is done by choosing
+    /// challange y and making c_vec = y*[T^1, T^2, T^3, T^4, T^6, T^7]. This ensure that resultant co-effs that
+    /// can interfere with T^5 coming from linear side(l_vec side) are always multiplied by y. Overall, our verification
+    /// equation looks something like:
+    ///
+    /// T^5 = Q^0X^0Y^0(a) + Q^iX^0Y^0(b) + Q^0X^1Y^0(c) + Q^0X^0Y^1(d)
+    /// (a) = Sum-value constraint (1 total constraint)
+    /// (b) = Reciprocal constraint in Q^i (n total contraints)
+    /// (c) = Range check constraint in Q^0, X^1, Y^0 (1 total constraints)
+    /// (d) = Linear side (l_vec side) in Y^1 (1 total constraints)
+    ///
+    /// The separation of these constraints by different challenges and using the schwartz-zippel lemma, we can
+    /// say that all of (a), (b), (c) and (d) are satisfied with high probability. Which is some rough intuition as to why the
+    /// protocol is sound. Reasoning about Zk is slightly complicated and we skip that for now.
+    ///
+    /// Lastly, we also need to add cross public terms to P, which are: (Restating all terms again)
+    /// P = 0
+    /// P += <alpha_m_vec*t^4, G_vec> + <alpha_d_vec*t^3, G_vec> + <alpha_r1_vec*t^2, G_vec> + <alpha_r2_vec*t^2, G_vec> // Commitments to alpha_i in G_vec
+    /// P += 2*T^5*<alpha_d_vec, alpha_r2>*G // Reciprocal constraint public term i G // Refered as v_hat1 in code
+    /// P += 2*T^5*x<q_pow_inv*alpha_d_vec, alpha_r1> // Range check constraint public term in G // Refered as v_hat2 in code
+    /// P += P += 2*T^5*<1_vec, q_pows_vec>G // Sum value constant in G // Refered as v_hat3 in code
+    /// P += 2*x^2T^8*|alpha_m|_q*G // T^8 public term in G // Refered as v_hat4 in code
     ///
     fn prove_round_3<R: CryptoRng + RngCore>(&mut self, rng: &mut R, x: Scalar<Public>, y: Scalar<Public>, q: Scalar<Public>, e: Scalar<Public>, lambda: Scalar<Public>) {
         let d = self.r1_sec.as_ref().unwrap().d.clone();
@@ -463,6 +512,9 @@ impl<'a> Prover<'a> {
         r3_challenge(t, self.r3_comm.as_ref().unwrap())
     }
 
+    /// Round 4:
+    /// Run the norm argument on the obtained challenge t. If we have sent the correct commiments, we only
+    /// need to evaluate the poly w_vec at t and the poly l_vec at t. and run the norm argument on them
     fn proof(self, y: Scalar<Public>, t: Scalar<Public>, r: Scalar<Public>, transcript: &mut Transcript) -> Proof {
         fn print_neg_vec(v: &[Scalar<Public, Zero>]) {
             for (i, v_i) in v.iter().enumerate() {
@@ -522,33 +574,6 @@ impl<'a> Prover<'a> {
         let t = self.r3_challenge(transcript);
         dbg!(&self.r3_sec);
 
-        // {
-        //     println!("s[0] {}", self.r3_sec.as_ref().unwrap().w.coeffs[0][0]);
-        //     println!("m[0] {}", self.r1_sec.as_ref().unwrap().m[0]);
-        //     println!("d[0] {}", self.r1_sec.as_ref().unwrap().d[0]);
-        //     println!("r[0] {}", self.r2_sec.as_ref().unwrap().r[0]);
-
-        //     println!("s[1] {}", self.r3_sec.as_ref().unwrap().w.coeffs[0][1]);
-        //     println!("m[1] {}", self.r1_sec.as_ref().unwrap().m[1]);
-        //     println!("d[1] {}", self.r1_sec.as_ref().unwrap().d[1]);
-        //     println!("r[1] {}", self.r2_sec.as_ref().unwrap().r[1]);
-
-        //     println!("b_s {}", self.r3_sec.as_ref().unwrap().b_s);
-        //     println!("b_d {}", self.r1_sec.as_ref().unwrap().b_d);
-        //     println!("b_m {}", self.r1_sec.as_ref().unwrap().b_m);
-        //     println!("b_r {}", self.r2_sec.as_ref().unwrap().b_r);
-
-        //     println!("-l_s[0] {}", -&self.r3_sec.as_ref().unwrap().l.coeffs[0][0]);
-        //     println!("-l_s[1] {}", -&self.r3_sec.as_ref().unwrap().l.coeffs[0][1]);
-        //     println!("-l_s[2] {}", -&self.r3_sec.as_ref().unwrap().l.coeffs[0][2]);
-        //     println!("-l_s[3] {}", -&self.r3_sec.as_ref().unwrap().l.coeffs[0][3]);
-        //     println!("-l_s[4] {}", -&self.r3_sec.as_ref().unwrap().l.coeffs[0][4]);
-        //     println!("-l_s[5] {}", -&self.r3_sec.as_ref().unwrap().l.coeffs[0][5]);
-
-        //     println!("l_d[0] {}", self.r1_sec.as_ref().unwrap().l_d);
-        //     println!("l_m[0] {}", self.r1_sec.as_ref().unwrap().l_m);
-        //     println!("l_r[0] {}", self.r2_sec.as_ref().unwrap().l_r);
-        // }
         // Round 4
         self.proof(y, t, r, transcript)
     }
